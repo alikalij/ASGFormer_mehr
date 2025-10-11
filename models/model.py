@@ -1,17 +1,23 @@
 import torch
+import importlib.util
+import os
+import sys
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from torch_geometric.nn import knn, knn_graph
 import torch_geometric.nn as pyg_nn
-from torch_geometric.nn import MessagePassing # برای پیاده‌سازی کارآمد Attention
-import torch_geometric.utils as pyg_utils
+from torch_geometric.utils import scatter as pyg_scatter
+import warnings
+from torch_geometric.nn import knn_graph, knn_interpolate, fps
+from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.utils import softmax as pyg_softmax
 
 
 class VirtualNode(nn.Module):
     """
-    ماژول گره مجازی (VNGO) برای تجمیع و توزیع زمینه جهانی.
-    به جای جمع، از میانگین استفاده می‌شود تا در برابر تغییرات اندازه N پایدارتر باشد.
+    این ماژول گره مجازی را پیاده‌سازی می‌کند که طبق مقاله، برای агрегирование
+    و توزیع اطلاعات سراسری در گراف به کار می‌رود.
+    پیاده‌سازی فعلی یک نسخه ساده و مؤثر با استفاده از میانگین‌گیری است.
     """
     def __init__(self, hidden_dim):
         super().__init__()
@@ -20,273 +26,110 @@ class VirtualNode(nn.Module):
         self.norm = nn.LayerNorm(hidden_dim)
 
     def forward(self, x):
-        # تجمیع زمینه جهانی: میانگین ویژگی‌ها روی تمام نقاط ->
+        if x.size(0) == 0:
+            return x
+        # агрегирование اطلاعات سراسری با میانگین‌گیری
         global_context = x.mean(dim=0, keepdim=True)
         global_context = self.aggregate(global_context)
         global_context = self.norm(global_context)
-        
-        # توزیع زمینه جهانی: Context به x اضافه می‌شود (از طریق Broadcasting)
-        distributed_context = self.distribute(global_context)
-        return x + distributed_context
+        # توزیع اطلاعات سراسری به تمام گره‌ها
+        return x + self.distribute(global_context)
 
-
-class AdaptiveGraphAttention(MessagePassing):
+class AdaptiveGraphTransformerBlock(MessagePassing):
     """
-    پیاده‌سازی بهینه AGT Attention با استفاده از MessagePassing PyG (پیچیدگی O(N*K)).
-    این جایگزین پیاده‌سازی O(N^2) قبلی است.
+    بلوک اصلی Adaptive Graph Transformer (AGT) مطابق با بخش 3.2 مقاله.
+    این بلوک ویژگی‌های وزنی (Weighted Features) را بر اساس تفاوت ویژگی‌ها و موقعیت
+    محاسبه کرده و از مکانیزم توجه گرافی (Graph Attention) برای به‌روزرسانی گره‌ها استفاده می‌کند.
     """
-    def __init__(self, hidden_dim, dropout_param=0.1, heads=1):
+    def __init__(self, in_channels, out_channels, dropout=0.1):
         super().__init__(aggr='add', flow='source_to_target')
-        self.hidden_dim = hidden_dim
-        self.heads = heads
-        self.d_k = hidden_dim // heads # ابعاد هر سر توجه
         
-        if self.d_k * self.heads!= hidden_dim:
-             raise ValueError("hidden_dim must be divisible by heads")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
 
-        # لایه‌های خطی برای Q, K, V
-        self.lin_q = nn.Linear(hidden_dim, hidden_dim)
-        self.lin_k = nn.Linear(hidden_dim, hidden_dim)
-        self.lin_v = nn.Linear(hidden_dim, hidden_dim)
-
-        # MLP برای جاسازی موقعیت نسبی (Delta P) - Attention Bias
-        # این ماژول بایاس موقعیتی را محاسبه می‌کند.
-        self.position_mlp = nn.Sequential(
-            nn.Linear(3, hidden_dim), 
+        self.mlp_feature = nn.Sequential(
+            nn.Linear(in_channels, out_channels),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.LayerNorm(out_channels)
         )
-        
-        self.dropout = nn.Dropout(p=dropout_param)
-        self.norm = nn.LayerNorm(hidden_dim)
-        self.scale = math.sqrt(self.d_k)
-
-    def forward(self, x, edge_index, pos):
-        # 1. محاسبه Q, K, V
-        Q = self.lin_q(x).view(-1, self.heads, self.d_k)
-        K = self.lin_k(x).view(-1, self.heads, self.d_k)
-        V = self.lin_v(x).view(-1, self.heads, self.d_k)
-
-        # 2. محاسبه جاسازی موقعیت نسبی (Delta P)
-        # row: گره هدف (i), col: گره مبدا (j)
-        row, col = edge_index
-        rel_pos = pos[row] - pos[col] # [E, 3] -> p_i - p_j
-        
-        # جاسازی موقعیت نسبی (Attention Bias)
-        pos_emb = self.position_mlp(rel_pos).view(-1, self.heads, self.d_k) # [E, heads, d_k]
-
-        # 3. شروع Message Passing
-        # انتقال Q، K، V و pos_emb به متد message
-        # Q_i در message با Q[row]، K_j با K[col] و... متناظر است.
-        out = self.propagate(edge_index, Q=Q, K=K, V=V, pos_emb=pos_emb)
-        
-        # 4. اتصال باقی‌مانده و نرمال‌سازی
-        out = out.view(-1, self.hidden_dim)
-        # طبق Eq. (5) مقاله: T_ij = Norm(Attn + phi F_i)
-        output = self.norm(out + x) 
-        
-        # توجه: وزن‌های توجه تنک نهایی (E x heads) به دلیل ماهیت MessagePassing برگردانده نمی‌شوند
-        # مگر اینکه به طور خاص در متد message ذخیره شوند.
-        return output, None 
-
-    def message(self, Q_i, K_j, V_j, pos_emb):
-        # Q_i: Query گره هدف (i), K_j: Key گره مبدا (j), V_j: Value گره مبدا (j)
-        
-        # ترکیب بایاس موقعیتی با Value (مشابه Point Transformer)
-        # این عمل W_ij (در فرمول AGT) را دربرمی‌گیرد که شامل Delta p_ij است.
-        V_j_adapted = V_j + pos_emb # [E, heads, d_k]
-
-        # محاسبه امتیاز توجه (Attention Score) برای هر یال (edge)
-        # آلفا [E, heads] است
-        alpha = (Q_i * K_j).sum(dim=-1) / self.scale 
-
-        # اعمال Softmax در طول همسایگان (row)
-        # pyg_utils.softmax اطمینان می‌دهد که Softmax روی هر مجموعه همسایه (گره هدف row) اعمال شود.
-        alpha = pyg_utils.softmax(alpha, self.index) # self.index = row
-
-        # ضرب در Value ترکیبی و Dropout
-        return self.dropout(alpha).unsqueeze(-1) * V_j_adapted
-
-
-class AGTBlock(nn.Module):
-    """
-    بلوک هسته‌ای Adaptive Graph Transformer (AGT)
-    """
-    def __init__(self, input_dim, output_dim, dropout_param=0.1):
-        super(AGTBlock, self).__init__()
-        # MLP اولیه
-        self.mlp = nn.Sequential(
-            nn.Linear(input_dim, output_dim),
+        # این MLP ویژگی وزنی W_ij را بر اساس تفاوت ویژگی (Δf) و تفاوت موقعیت (Δp) می‌سازد
+        self.mlp_weighted_feature = nn.Sequential(
+            nn.Linear(out_channels + 3, out_channels),
             nn.ReLU(),
-            nn.Dropout(p=dropout_param),
-            nn.Linear(output_dim, output_dim)
+            nn.LayerNorm(out_channels) 
         )
-        # استفاده از لایه بهینه شده
-        self.graph_attention = AdaptiveGraphAttention(output_dim, dropout_param)
-        self.residual = nn.Identity() if input_dim == output_dim else nn.Linear(input_dim, output_dim)
-        # لایه نرمال‌سازی دوم (بعد از Attn و Residual)
-        self.norm_2 = nn.LayerNorm(output_dim) 
-        self.dropout = nn.Dropout(p=dropout_param)
-
-    def forward(self, x, edge_index, pos):
-        # 1. MLP & Residual (Pre-Norm style)
-        residual_in = self.residual(x)
-        h = self.mlp(x)
+        self.mlp_q = nn.Linear(out_channels, out_channels)
+        self.mlp_k = nn.Linear(out_channels, out_channels)
         
-        # 2. Adaptive Graph Attention (O(N*K))
-        h_attn, _ = self.graph_attention(h, edge_index, pos)
-        h_attn = self.dropout(h_attn)
-        
-        # 3. ترکیب و Norm نهایی
-        output = self.norm_2(h_attn + residual_in)
-        return output, None # توجه: None به جای attention_weights بازگردانده می‌شود.
+        # Position Embedding بر اساس تفاوت موقعیت نسبی (Δp_ij)
+        self.pos_embedding = nn.Sequential(
+            nn.Linear(3, out_channels),
+            nn.ReLU(),
+            nn.LayerNorm(out_channels)
+        )
+        self.final_norm = nn.LayerNorm(out_channels)
+        self.dropout = nn.Dropout(p=dropout)
 
+        # اتصال کوتاه (Residual Connection) برای جلوگیری از محو شدن گرادیان
+        if in_channels != out_channels:
+            self.residual = nn.Linear(in_channels, out_channels)
+        else:
+            self.residual = nn.Identity()
+            
+    def forward(self, x, pos, edge_index):
+        edge_index = edge_index.long()
+        features = self.mlp_feature(x)
+        
+        # فراخوانی propagate که به صورت داخلی message و aggregate را اجرا می‌کند
+        updated_features = self.propagate(edge_index, x=features, pos=pos)
+        
+        # اعمال اتصال کوتاه و نرمال‌سازی نهایی
+        output = self.final_norm(updated_features + self.residual(x))
+        output = self.dropout(output)
+        return output
+
+    def message(self, x_i, x_j, pos_i, pos_j, index):
+        # محاسبه Δf و Δp طبق مقاله
+        delta_f = x_i - x_j
+        delta_p = pos_i - pos_j
+        
+        # Eq. (2) در مقاله: محاسبه ویژگی وزنی W_ij
+        concatenated_deltas = torch.cat([delta_f, delta_p], dim=-1)
+        W_ij = self.mlp_weighted_feature(concatenated_deltas)
+        
+        # Eq. (4) در مقاله: مکانیزم توجه گرافی
+        query_base = self.mlp_q(x_i)
+        pos_emb = self.pos_embedding(delta_p)
+        query = query_base + pos_emb
+        key = self.mlp_k(W_ij)
+        value = W_ij
+        
+        attention_score = (query * key).sum(dim=-1) / math.sqrt(self.out_channels)
+        attention_weights = pyg_softmax(attention_score, index)
+        
+        # اعمال وزن‌های توجه به مقادیر (value)
+        return attention_weights.unsqueeze(-1) * value
 
 class Stage(nn.Module):
     def __init__(self, input_dim, hidden_dim, num_layers, dropout_param=0.1):
         super(Stage, self).__init__()
-        
-        if num_layers <= 0:
-            raise ValueError("num_layers must be positive")
-        if dropout_param < 0 or dropout_param >= 1:
-            raise ValueError("dropout_param must be in [0, 1)")
-        
         layers = []
         for i in range(num_layers):
             current_input_dim = input_dim if i == 0 else hidden_dim
-            # استفاده از AGTBlock بهینه شده
-            layers.append(AGTBlock(current_input_dim, hidden_dim, dropout_param))
+            layers.append(AdaptiveGraphTransformerBlock(current_input_dim, hidden_dim, dropout_param))
         self.layers = nn.ModuleList(layers)
-        
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        self.dropout_param = dropout_param
 
-    def forward(self, x, edge_index, pos):
-        self._validate_inputs(x, edge_index, pos)
-        attention_weights_all = [] # این لیست اکنون فقط شامل None خواهد بود، اما ساختار حفظ می‌شود.
-        
+    def forward(self, x, pos, edge_index):
+        if x.size(0) == 0:
+            return x
         for layer in self.layers:
-            # x, attention_weights = layer(x, edge_index, pos)
-            x, attention_weights = layer(x, edge_index, pos)
-            attention_weights_all.append(attention_weights)
-        
-        return x, attention_weights_all
-
-    def _validate_inputs(self, x, edge_index, pos):
-        if x.dim()!= 2:
-            raise ValueError(f"Features must be 2D tensor, got {x.dim()}D")
-        if edge_index.dim()!= 2 or edge_index.size(0)!= 2:
-            raise ValueError("edge_index must be shape [2, E]")
-        if pos.dim()!= 2 or pos.size(-1)!= 3:
-            raise ValueError("pos must be shape [N, 3]")
-        if x.size(0)!= pos.size(0):
-            raise ValueError("Feature and position count mismatch")
-        if x.size(-1)!= self.input_dim and x.size(-1)!= self.hidden_dim:
-            # فقط اولین لایه باید input_dim را بپذیرد، لایه‌های بعدی hidden_dim.
-            pass
-
-    def extra_repr(self):
-        return f"input_dim={self.input_dim}, hidden_dim={self.hidden_dim}, num_layers={self.num_layers}, dropout={self.dropout_param}"
-
-
-class InterpolationStage(nn.Module):
-    """
-    مرحله درون‌یابی دیکودر با توجه محلی (KNN-based Attention). (اصلاح شده)
-    جهت‌یابی صحیح KNN و تجمیع دقیق با استفاده از index_add_.
-    """
-    def __init__(self, decoder_dim, encoder_dim, out_dim, knn_param, dropout_param=0.1):
-        super(InterpolationStage, self).__init__()
-        
-        if knn_param <= 0:
-            raise ValueError("knn_param must be positive")
-        
-        self.knn_param = knn_param
-        self.decoder_dim = decoder_dim
-        self.encoder_dim = encoder_dim
-        self.out_dim = out_dim
-
-        self.query_layer = nn.Linear(encoder_dim, decoder_dim)
-        self.key_layer = nn.Linear(decoder_dim, decoder_dim)
-        self.value_layer = nn.Linear(decoder_dim, decoder_dim)
-
-        self.combination_mlp = nn.Sequential(
-            nn.Linear(decoder_dim + encoder_dim, out_dim),
-            nn.ReLU(),
-            nn.Dropout(p=dropout_param),
-            nn.Linear(out_dim, out_dim)
-        )
-        self.norm = nn.LayerNorm(out_dim)
-        self.dropout = nn.Dropout(p=dropout_param)
-
-    def forward(self, decoder_features, decoder_pos, encoder_features, encoder_pos, encoder_labels):
-        self._validate_inputs(decoder_features, decoder_pos, encoder_features, encoder_pos)
-        
-        N_fine = encoder_pos.size(0)
-        K = self.knn_param
-
-        # 1. جستجوی K همسایه (KNN) - جهت‌یابی صحیح برای Upsampling
-        # x=نقاط فاین/کوئری, y=نقاط کوآرس/مرجع
-        knn_indices = knn(x=encoder_pos, y=decoder_pos, k=K) # [2, N_fine * K]
-        
-        neighbor_indices = knn_indices[1] # [N_fine * K] (اندیس‌های کوآرس)
-
-        # 2. استخراج ویژگی‌ها
-        neighbor_decoder_features = decoder_features[neighbor_indices] #
-
-        # 3. محاسبه Q, K, V
-        # اندیس‌های هدف (فاین) برای کوئری
-        target_indices = knn_indices
-        query_fine = encoder_features[target_indices] #
-        
-        query = self.query_layer(query_fine)         #
-        keys = self.key_layer(neighbor_decoder_features)  #
-        values = self.value_layer(neighbor_decoder_features) #
-
-        # 4. محاسبه امتیاز توجه
-        scores = (query * keys).sum(dim=-1) / math.sqrt(self.decoder_dim) 
-        
-        # 5. Softmax و تجمیع وزن‌دار (Aggregation)
-        # Softmax روی K همسایه برای هر نقطه فاین (target_indices)
-        weights = pyg_utils.softmax(scores, target_indices) # [N_fine * K]
-        
-        weighted_values = values * weights.unsqueeze(-1) #
-
-        # تجمیع نهایی (Upsampled): جمع وزن‌دار روی هر N_fine نقطه هدف.
-        aggregated_decoder_features = torch.zeros(N_fine, self.decoder_dim, device=weighted_values.device)
-        aggregated_decoder_features.index_add_(0, target_indices, weighted_values) #
-
-        # 6. ترکیب ویژگی‌ها (Skip Connection)
-        combined_features = torch.cat([aggregated_decoder_features, encoder_features], dim=-1)
-        upsampled_features = self.combination_mlp(combined_features)
-        
-        output = self.norm(upsampled_features)
-        output = self.dropout(output)
-        
-        return output, encoder_pos, encoder_labels
-
-    def _validate_inputs(self, decoder_features, decoder_pos, encoder_features, encoder_pos):
-        if decoder_features.dim()!= 2 or encoder_features.dim()!= 2:
-            raise ValueError("Features must be 2D tensors")
-        if decoder_pos.size(-1)!= 3 or encoder_pos.size(-1)!= 3:
-            raise ValueError("Positions must have 3 coordinates")
-        if decoder_features.size(0)!= decoder_pos.size(0):
-            raise ValueError("Decoder features and positions count mismatch")
-
+            x = layer(x, pos, edge_index)
+        return x
 
 class Encoder(nn.Module):
-    """
-    ماژول Encoder با ساختار هرمی و Downsampling
-    """
     def __init__(self, input_dim, stages_config, knn_param, dropout_param=0.1):
         super(Encoder, self).__init__()
         
-        if not isinstance(stages_config, list) or len(stages_config) == 0:
-            raise ValueError("stages_config must be a non-empty list")
-        if knn_param <= 0:
-            raise ValueError("knn_param must be positive")
-
         self.knn_param = knn_param
         self.stages = nn.ModuleList()
         self.virtual_nodes = nn.ModuleList()
@@ -294,20 +137,15 @@ class Encoder(nn.Module):
 
         current_dim = input_dim
         for idx, stage_cfg in enumerate(stages_config):
-            if 'hidden_dim' not in stage_cfg or 'num_layers' not in stage_cfg:
-                raise ValueError("Stage config must contain hidden_dim and num_layers")
-            
-            # لایه MLP اولیه (Stage 1)
+            # مرحله اول فقط یک MLP ساده است، طبق مقاله
             if idx == 0:
                 self.stages.append(
                     nn.Sequential(
                         nn.Linear(current_dim, stage_cfg['hidden_dim']),
                         nn.ReLU(),
-                        nn.Dropout(p=dropout_param),
-                        nn.Linear(stage_cfg['hidden_dim'], stage_cfg['hidden_dim'])
+                        nn.LayerNorm(stage_cfg['hidden_dim']), # بهبود: افزودن LayerNorm
                     )
                 )
-            # لایه‌های AGT (Stage 2 تا آخر)
             else:
                 self.stages.append(
                     Stage(input_dim=current_dim,
@@ -321,171 +159,140 @@ class Encoder(nn.Module):
             current_dim = stage_cfg['hidden_dim']
 
     def forward(self, x, pos, labels):
-        self._validate_inputs(x, pos, labels)
-        features = []
-        positions = []
-        sampled_labels = []
-        attention_maps = []
+        features = [x]
+        positions = [pos]
+        sampled_labels = [labels]
 
-        for stage, virtual_node, ratio in zip(self.stages, self.virtual_nodes, self.downsampling_ratios):
-            if ratio is not None:
-                # Downsample (استفاده از FPS)
-                x, pos, labels, edge_index = self._downsample(x, pos, labels, ratio)
-            else:
-                # ساخت گراف KNN در بالاترین رزولوشن (N)
-                edge_index = knn_graph(pos, k=self.knn_param, loop=False)
+        for stage_idx, (stage, virtual_node, ratio) in enumerate(zip(self.stages, self.virtual_nodes, self.downsampling_ratios)):
+            
+            # نمونه‌برداری کاهشی (Downsampling) برای مراحل بعد از اول
+            if stage_idx > 0:
+                x, pos, labels = self._downsample(x, pos, labels, ratio)
 
+            if x.size(0) == 0:
+                print(f"🛑 هشدار: اجرای Encoder به دلیل صفر شدن تعداد نقاط در Stage {stage_idx} متوقف شد.")
+                break
+            
             if isinstance(stage, nn.Sequential):
                 x = stage(x)
-                attention_weights = None
             else:
-                # اجرای AGT Stage بهینه شده
-                x, attention_weights = stage(x, edge_index, pos)
-                attention_maps.append(attention_weights)
-
-            # اعمال Virtual Node (VNGO)
+                # بهبود: k را به صورت ایمن تنظیم می‌کنیم تا از تعداد نقاط بیشتر نباشد
+                k_safe = min(self.knn_param, x.size(0) -1) # k باید از N کوچکتر باشد
+                if k_safe > 0:
+                    edge_index = knn_graph(pos, k=k_safe, loop=False)
+                    x = stage(x, pos, edge_index)
+            
             x = virtual_node(x)
+            
             features.append(x)
             positions.append(pos)
             sampled_labels.append(labels)
             
-        return features, positions, sampled_labels, attention_maps
+        return features, positions, sampled_labels
 
     def _downsample(self, x, pos, labels, ratio):
-        #... (بقیه منطق downsample دست‌نخورده باقی می‌ماند)...
-        ratio_val = ratio.item() if isinstance(ratio, torch.Tensor) else float(ratio)
-        if ratio_val <= 0 or ratio_val > 1:
-            raise ValueError(f"Downsample ratio must be in (0, 1], got {ratio_val}")
+        num_points_to_keep = int(x.size(0) * ratio)
+        if num_points_to_keep < 1:
+            return torch.empty(0, x.size(1), device=x.device), \
+                   torch.empty(0, 3, device=pos.device), \
+                   torch.empty(0, device=labels.device)
         
-        # نکته بهبود: این FPS می‌تواند در آینده با CFPS یا CBS جایگزین شود.
-        mask = pyg_nn.fps(pos, ratio=ratio_val)
-        x_sampled = x[mask]
-        pos_sampled = pos[mask]
-        labels_sampled = labels[mask]
+        # بهبود: استفاده از تابع fps استاندارد از PyG
+        mask = fps(pos, ratio=ratio)
+        return x[mask], pos[mask], labels[mask]
+
+# بهبود: رفع کامل خطای CUDA با جایگزینی پیاده‌سازی دستی با knn_interpolate
+class InterpolationStage(nn.Module):
+    def __init__(self, coarse_dim, fine_dim, out_dim, knn_param, dropout_param=0.1):
+        super(InterpolationStage, self).__init__()
         
-        # ساخت گراف KNN روی نقاط نمونه‌برداری شده
-        edge_index = knn_graph(pos_sampled, k=self.knn_param, loop=False)
-        return x_sampled, pos_sampled, labels_sampled, edge_index
+        self.knn_param = knn_param
+        self.mlp = nn.Sequential(
+            nn.Linear(coarse_dim + fine_dim, out_dim),
+            nn.ReLU(),
+            nn.LayerNorm(out_dim),
+            nn.Dropout(p=dropout_param)
+        )
 
-    def _validate_inputs(self, x, pos, labels):
-        #... (بقیه اعتبارسنجی‌ها دست‌نخورده باقی می‌ماند)...
-        if x.dim()!= 2:
-            raise ValueError(f"Features must be 2D tensor, got {x.dim()}D")
-        if pos.dim()!= 2 or pos.size(-1)!= 3:
-            raise ValueError("Positions must be shape [N, 3]")
-        if labels.dim()!= 1:
-            raise ValueError("Labels must be 1D tensor")
-        if x.size(0)!= pos.size(0) or x.size(0)!= labels.size(0):
-            raise ValueError("Inputs must have same number of points")
+    def forward(self, coarse_features, coarse_pos, fine_features, fine_pos):
+        if coarse_pos.size(0) == 0:
+            # اگر ورودی لایه درشت خالی باشد، نمی‌توان درون‌یابی کرد.
+            # در این حالت، ویژگی‌های لایه ریز را با یک MLP ساده پردازش می‌کنیم.
+            return self.mlp(torch.cat([torch.zeros_like(fine_features), fine_features], dim=1))
 
+        # استفاده از knn_interpolate برای درون‌یابی امن و بهینه
+        # این تابع برای هر نقطه در fine_pos، سه همسایه نزدیک در coarse_pos پیدا می‌کند،
+        # ویژگی‌های آنها را بر اساس فاصله وزن‌دهی کرده و به نقطه fine_pos منتقل می‌کند.
+        k_safe = min(self.knn_param, coarse_pos.size(0))
+        interpolated_features = knn_interpolate(
+            coarse_features, coarse_pos, fine_pos, k=k_safe
+        )
+
+        # ترکیب ویژگی‌های درون‌یابی شده با ویژگی‌های اصلی از طریق skip-connection
+        combined = torch.cat([interpolated_features, fine_features], dim=1)
+        return self.mlp(combined)
 
 class Decoder(nn.Module):
-    """
-    ماژول Decoder با Interpolation Stage بهینه شده
-    """
     def __init__(self, main_output_dim, stages_config, knn_param, dropout_param=0.1):
         super(Decoder, self).__init__()
         
-        if not isinstance(stages_config, list) or len(stages_config) < 2:
-            raise ValueError("stages_config must be a list with at least 2 stages")
-        if knn_param <= 0:
-            raise ValueError("knn_param must be positive")
-
-        self.knn_param = knn_param
         self.stages = nn.ModuleList()
-        self.skip_connections = nn.ModuleList()
+        num_encoder_stages = len(stages_config)
 
-        for i in range(len(stages_config)-1):
-            encoder_stage = stages_config[-(i+1)]
-            prev_stage = stages_config[-(i+2)]
-            output_dim = prev_stage['hidden_dim']
+        # دیکودر یک مرحله کمتر از انکودر دارد
+        for i in range(num_encoder_stages - 1):
+            coarse_stage_cfg = stages_config[-(i + 1)] 
+            fine_stage_cfg = stages_config[-(i + 2)]
+            
             self.stages.append(
                 InterpolationStage(
-                    decoder_dim=encoder_stage['hidden_dim'],
-                    encoder_dim=output_dim,
-                    out_dim=output_dim,
+                    coarse_dim=coarse_stage_cfg['hidden_dim'],
+                    fine_dim=fine_stage_cfg['hidden_dim'],
+                    out_dim=fine_stage_cfg['hidden_dim'],
                     knn_param=knn_param,
                     dropout_param=dropout_param
                 )
             )
-            self.skip_connections.append(
-                nn.Sequential(
-                    nn.Linear(output_dim, output_dim),
-                    nn.ReLU(),
-                    nn.Dropout(p=dropout_param)
-                )
-            )
+            
         self.final_mlp = nn.Sequential(
-            nn.Linear(stages_config[0]['hidden_dim'], main_output_dim),
-            nn.Dropout(p=dropout_param)
+            nn.Linear(stages_config[0]['hidden_dim'], stages_config[0]['hidden_dim']),
+            nn.ReLU(),
+            nn.Linear(stages_config[0]['hidden_dim'], main_output_dim)
         )
 
     def forward(self, encoder_features, positions, sampled_labels):
-        self._validate_inputs(encoder_features, positions, sampled_labels)
-        
-        # شروع از عمیق‌ترین (کوآرس‌ترین) لایه
-        x = encoder_features[-1]
-        pos = positions[-1]
-        labels = sampled_labels[-1]
+        if not encoder_features:
+            return torch.empty(0), torch.empty(0)
 
-        for i, (stage, skip_conn) in enumerate(zip(self.stages, self.skip_connections)):
-            # ویژگی‌های Skip از لایه متناظر (N/4, 64)
-            skip_features = encoder_features[-(i+2)]
-            skip_pos = positions[-(i+2)]
-            skip_lbls = sampled_labels[-(i+2)]
+        # شروع از خروجی آخرین (درشت‌ترین) لایه انکودر
+        x = encoder_features.pop()
+        pos = positions.pop()
+
+        for stage in self.stages:
+            # ویژگی‌ها و موقعیت‌های لایه ریزتر (اتصال کوتاه)
+            skip_features = encoder_features.pop()
+            skip_pos = positions.pop()
             
-            # درون‌یابی: upsample از x, pos (کوآرس) به skip_features, skip_pos (فاین)
-            x, pos, labels = stage(
-                decoder_features=x,
-                decoder_pos=pos,
-                encoder_features=skip_features,
-                encoder_pos=skip_pos,
-                encoder_labels=skip_lbls
-            )
-            # ترکیب با Skip Connection (جمع)
-            x = x + skip_conn(skip_features)
+            x = stage(x, pos, skip_features, skip_pos)
+            pos = skip_pos # موقعیت فعلی به موقعیت لایه ریزتر به‌روز می‌شود
 
-        return self.final_mlp(x), labels
-
-    def _validate_inputs(self, encoder_features, positions, sampled_labels):
-        #... (بقیه اعتبارسنجی‌ها دست‌نخورده باقی می‌ماند)...
-        if not (len(encoder_features) == len(positions) == len(sampled_labels)):
-            raise ValueError("Input lists must have same length")
-        for i, (feat, pos, lbl) in enumerate(zip(encoder_features, positions, sampled_labels)):
-            if feat.dim() != 2 or pos.dim() != 2 or pos.size(-1) != 3 or lbl.dim() != 1:
-                raise ValueError(f"Inputs at stage {i} have invalid shape")
-            if feat.size(0) != pos.size(0) or feat.size(0) != lbl.size(0):
-                raise ValueError(f"Inputs at stage {i} have mismatched sizes")
-
+        final_labels = sampled_labels[0]
+        return self.final_mlp(x), final_labels
 
 class ASGFormer(nn.Module):
-    """
-    ماژول اصلی ASGFormer با ساختار Encoder-Decoder
-    """
     def __init__(self, feature_dim, main_input_dim, main_output_dim, stages_config, knn_param, dropout_param=0.1):
         super(ASGFormer, self).__init__()
         
-        if not isinstance(stages_config, list) or len(stages_config) < 2:
-            raise ValueError("stages_config must be a list with at least 2 stages")
-        if knn_param <= 0:
-            raise ValueError("knn_param must be positive")
-
-        # جاسازی ویژگی‌های اولیه (X)
         self.x_mlp = nn.Sequential(
             nn.Linear(feature_dim, main_input_dim),
             nn.ReLU(),
-            nn.Dropout(p=dropout_param),
-            nn.Linear(main_input_dim, main_input_dim)
+            nn.LayerNorm(main_input_dim)
         )
-        # جاسازی موقعیت اولیه (P)
         self.pos_mlp = nn.Sequential(
             nn.Linear(3, main_input_dim),
             nn.ReLU(),
-            nn.Dropout(p=dropout_param),
-            nn.Linear(main_input_dim, main_input_dim)
+            nn.LayerNorm(main_input_dim)
         )
-        # ترکیب ویژگی‌ها: F_combined = MLP(X) + MLP(P)
-        
         self.encoder = Encoder(
             input_dim=main_input_dim,
             stages_config=stages_config,
@@ -501,17 +308,22 @@ class ASGFormer(nn.Module):
         self._initialize_weights()
 
     def forward(self, x, pos, labels):
-        self._validate_inputs(x, pos, labels)
-        
         x_emb = self.x_mlp(x)
         pos_emb = self.pos_mlp(pos)
-        combined_features = x_emb + pos_emb
+        combined_features = x_emb + pos_emb 
         
-        # Encoder: استخراج ویژگی‌های سلسله مراتبی
-        encoder_features, positions, sampled_labels, _ = self.encoder(combined_features, pos, labels)
+        # در انکودر، ما ویژگی‌های اصلی (قبل از اولین MLP) را هم ذخیره می‌کنیم
+        # چون دیکودر به آنها برای اتصال کوتاه نیاز دارد
+        initial_features = combined_features
+        initial_pos = pos
+        initial_labels = labels
         
-        # Decoder: بازتولید برچسب‌ها با Up-sampling
-        logits, final_labels = self.decoder(encoder_features, positions, sampled_labels)
+        encoder_features_list, positions_list, sampled_labels_list = self.encoder(combined_features, pos, labels)
+        
+        # اصلاح: انکودر ما در پیاده‌سازی جدید، ویژگی‌های اولیه را هم در لیست خروجی‌اش دارد.
+        # پس نیازی به ارسال جداگانه نیست.
+        
+        logits, final_labels = self.decoder(encoder_features_list, positions_list, sampled_labels_list)
         return logits, final_labels
 
     def _initialize_weights(self):
@@ -523,14 +335,3 @@ class ASGFormer(nn.Module):
             elif isinstance(m, nn.LayerNorm):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
-
-    def _validate_inputs(self, x, pos, labels):
-        #... (بقیه اعتبارسنجی‌ها دست‌نخورده باقی می‌ماند)...
-        if x.dim()!= 2:
-            raise ValueError(f"Features must be 2D tensor, got {x.dim()}D")
-        if pos.dim()!= 2 or pos.size(-1)!= 3:
-            raise ValueError("Positions must be shape [N, 3]")
-        if labels.dim()!= 1:
-            raise ValueError("Labels must be 1D tensor")
-        if x.size(0)!= pos.size(0) or x.size(0)!= labels.size(0):
-            raise ValueError("Input sizes must match along dimension 0")
