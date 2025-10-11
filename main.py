@@ -42,7 +42,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=hyperparams['batch_size'], shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=hyperparams['batch_size'], shuffle=False, num_workers=4)
 
-    feature_dim = 6 # XYZRGB
+    feature_dim = 9
     # ✅ اصلاح: این مقدار باید با hidden_dim مرحله اول برابر باشد
     main_input_dim = 32 
     main_output_dim = 13 # تعداد کلاس‌های S3DIS

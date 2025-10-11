@@ -119,7 +119,7 @@ class Stage(nn.Module):
             layers.append(AdaptiveGraphTransformerBlock(current_input_dim, hidden_dim, dropout_param))
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, x, pos, edge_index):
+    def forward(self, x, pos, edge_index, batch):
         if x.size(0) == 0:
             return x
         for layer in self.layers:
@@ -158,16 +158,17 @@ class Encoder(nn.Module):
             self.downsampling_ratios.append(stage_cfg.get('downsample_ratio', None))
             current_dim = stage_cfg['hidden_dim']
 
-    def forward(self, x, pos, labels):
+    def forward(self, x, pos, labels, batch):
         features = [x]
         positions = [pos]
         sampled_labels = [labels]
+        batches = [batch]
 
         for stage_idx, (stage, virtual_node, ratio) in enumerate(zip(self.stages, self.virtual_nodes, self.downsampling_ratios)):
             
             # نمونه‌برداری کاهشی (Downsampling) برای مراحل بعد از اول
             if stage_idx > 0:
-                x, pos, labels = self._downsample(x, pos, labels, ratio)
+                x, pos, labels, batch = self._downsample(x, pos, labels, batch, ratio)
 
             if x.size(0) == 0:
                 print(f"🛑 هشدار: اجرای Encoder به دلیل صفر شدن تعداد نقاط در Stage {stage_idx} متوقف شد.")
@@ -179,27 +180,33 @@ class Encoder(nn.Module):
                 # بهبود: k را به صورت ایمن تنظیم می‌کنیم تا از تعداد نقاط بیشتر نباشد
                 k_safe = min(self.knn_param, x.size(0) -1) # k باید از N کوچکتر باشد
                 if k_safe > 0:
-                    edge_index = knn_graph(pos, k=k_safe, loop=False)
-                    x = stage(x, pos, edge_index)
+                    edge_index = knn_graph(pos, k=k_safe, batch=batch, loop=False)
+                    x = stage(x, pos, edge_index, batch)
             
             x = virtual_node(x)
             
             features.append(x)
             positions.append(pos)
             sampled_labels.append(labels)
-            
-        return features, positions, sampled_labels
+            batches.append(batch)
 
-    def _downsample(self, x, pos, labels, ratio):
-        num_points_to_keep = int(x.size(0) * ratio)
-        if num_points_to_keep < 1:
-            return torch.empty(0, x.size(1), device=x.device), \
-                   torch.empty(0, 3, device=pos.device), \
-                   torch.empty(0, device=labels.device)
+        return features, positions, sampled_labels, batches
+
+    def _downsample(self, x, pos, labels, batch, ratio):
+        if ratio is None or ratio >= 1.0:
+            return x, pos, labels, batch
+        
+        #num_points_to_keep = int(x.size(0) * ratio)
+        #if num_points_to_keep < 1:
+        #    return torch.empty(0, x.size(1), device=x.device), \
+        #           torch.empty(0, 3, device=pos.device), \
+        #           torch.empty(0, device=labels.device), \
+        #           torch.empty(0, device=batch.device)
         
         # بهبود: استفاده از تابع fps استاندارد از PyG
-        mask = fps(pos, ratio=ratio)
-        return x[mask], pos[mask], labels[mask]
+        # fps فقط به batch نیاز دارد تا نقاط را به صورت جداگانه برای هر نمونه در بچ نمونه‌برداری کند
+        mask = fps(pos, batch, ratio=ratio)
+        return x[mask], pos[mask], labels[mask], batch[mask]
 
 # بهبود: رفع کامل خطای CUDA با جایگزینی پیاده‌سازی دستی با knn_interpolate
 class InterpolationStage(nn.Module):
@@ -260,7 +267,7 @@ class Decoder(nn.Module):
             nn.Linear(stages_config[0]['hidden_dim'], main_output_dim)
         )
 
-    def forward(self, encoder_features, positions, sampled_labels):
+    def forward(self, encoder_features, positions, sampled_labels, batches):
         if not encoder_features:
             return torch.empty(0), torch.empty(0)
 
@@ -307,7 +314,7 @@ class ASGFormer(nn.Module):
         )
         self._initialize_weights()
 
-    def forward(self, x, pos, labels):
+    def forward(self, x, pos, labels, batch):
         x_emb = self.x_mlp(x)
         pos_emb = self.pos_mlp(pos)
         combined_features = x_emb + pos_emb 
@@ -318,12 +325,12 @@ class ASGFormer(nn.Module):
         initial_pos = pos
         initial_labels = labels
         
-        encoder_features_list, positions_list, sampled_labels_list = self.encoder(combined_features, pos, labels)
+        encoder_features_list, positions_list, sampled_labels_list, batches_list  = self.encoder(combined_features, pos, labels, batch)
         
         # اصلاح: انکودر ما در پیاده‌سازی جدید، ویژگی‌های اولیه را هم در لیست خروجی‌اش دارد.
         # پس نیازی به ارسال جداگانه نیست.
         
-        logits, final_labels = self.decoder(encoder_features_list, positions_list, sampled_labels_list)
+        logits, final_labels = self.decoder(encoder_features_list, positions_list, sampled_labels_list, batches_list)
         return logits, final_labels
 
     def _initialize_weights(self):

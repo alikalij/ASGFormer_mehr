@@ -29,10 +29,10 @@ def train_model(model, dataloader_train, dataloader_val, criterion, optimizer, s
         train_loop = tqdm(dataloader_train, desc=f"Epoch {epoch+1}/{hyperparams['num_epochs']} [Train]")
         
         for step, batch in enumerate(train_loop):
-            x, pos, labels = batch.x.to(device), batch.pos.to(device), batch.y.to(device)
+            x, pos, labels, batch_tensor  = batch.x.to(device), batch.pos.to(device), batch.y.to(device), batch.batch.to(device)
             
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                outputs, _ = model(x, pos, labels)
+                outputs, _ = model(x, pos, labels, batch_tensor)
                 loss = criterion(outputs, labels)
                 loss = loss / accumulation_steps
 
@@ -63,9 +63,9 @@ def train_model(model, dataloader_train, dataloader_val, criterion, optimizer, s
         val_loop = tqdm(dataloader_val, desc=f"Epoch {epoch+1}/{hyperparams['num_epochs']} [Val]")
         with torch.no_grad():
             for batch in val_loop:
-                x, pos, labels = batch.x.to(device), batch.pos.to(device), batch.y.to(device)
+                x, pos, labels, batch_tensor = batch.x.to(device), batch.pos.to(device), batch.y.to(device), batch.batch.to(device)
                 with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                    outputs, _ = model(x, pos, labels)
+                    outputs, _ = model(x, pos, labels, batch_tensor)
                     loss = criterion(outputs, labels)
                 
                 total_val_loss += loss.item()
