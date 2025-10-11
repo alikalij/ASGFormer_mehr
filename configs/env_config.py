@@ -15,7 +15,7 @@ BASE_CONFIG = {
     # پارامترهای مشترک
     'main_output_dim': 13,
     'batch_size': 2,
-    'num_epochs': 45,
+    'num_epochs': 10,
     'learning_rate': 1e-3,
     'knn_param': 4,
     'num_points': 4096,
