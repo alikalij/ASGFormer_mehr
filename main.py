@@ -1,13 +1,17 @@
+# main.py
+
 import torch
 import torch.optim as optim
 from torch_geometric.loader import DataLoader
 from models.model import ASGFormer
-from data.dataset import PointCloudProcessor, H5Dataset, read_file_list, compute_class_weights_from_dataset
+# ✅ اصلاح: وارد کردن کلاس‌های جدید دیتاست
+from data.dataset import H5Dataset, PointCloudProcessor, read_file_list, compute_class_weights
 from train import train_model
 from configs.env_config import CONFIG
 import os
 
 def main():
+    main_output_dim = 13
     hyperparams = {
         'device': CONFIG['device'],
         'learning_rate': CONFIG['learning_rate'],
@@ -19,7 +23,7 @@ def main():
         'dropout_param': CONFIG['dropout_param'],
         'weight_decay': CONFIG['weight_decay'],
         'checkpoint_dir': CONFIG['checkpoint_dir'],
-        'num_classes': CONFIG['main_output_dim']
+        'num_classes': main_output_dim
     }
 
     # ✅ بهبود: downsample_ratio: 1.0 به None تغییر کرد تا واضح‌تر باشد
@@ -35,15 +39,16 @@ def main():
     train_files = read_file_list(os.path.join(dataset_path, "list", "train5.txt"))
     val_files = read_file_list(os.path.join(dataset_path, "list", "val5.txt"))
 
-    processor = PointCloudProcessor(num_points=hyperparams['num_points'], use_cache=True)
+    # ✅ اصلاح: استفاده از PointCloudProcessor جدید
+    processor = PointCloudProcessor(num_points=hyperparams['num_points'])
     train_dataset = H5Dataset(train_files, processor, dataset_path)
     val_dataset = H5Dataset(val_files, processor, dataset_path)
 
     train_loader = DataLoader(train_dataset, batch_size=hyperparams['batch_size'], shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=hyperparams['batch_size'], shuffle=False, num_workers=4)
 
+    # ✅ اصلاح: feature_dim به ۹ تغییر یافت
     feature_dim = 9
-    # ✅ اصلاح: این مقدار باید با hidden_dim مرحله اول برابر باشد
     main_input_dim = 32 
     main_output_dim = 13 # تعداد کلاس‌های S3DIS
 
@@ -54,10 +59,13 @@ def main():
                       knn_param=hyperparams['knn_param'],
                       dropout_param=hyperparams['dropout_param']).to(hyperparams['device'])
 
-    class_weights = compute_class_weights_from_dataset(train_dataset, main_output_dim).to(hyperparams['device'])
+    # ✅ اصلاح: محاسبه وزن‌ها با استفاده از تابع جدید
+    all_train_labels = [h5py.File(os.path.join(dataset_path, f), 'r')['label'][:] for f in train_files]
+    class_weights = compute_class_weights(all_train_labels, num_classes=main_output_dim).to(hyperparams['device'])
+    
     criterion = torch.nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=hyperparams['learning_rate'], weight_decay=hyperparams['weight_decay'])
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=hyperparams['num_epochs'], eta_min=1e-6)
+    optimizer = optim.AdamW(...)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(...)
 
     train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, hyperparams)
 

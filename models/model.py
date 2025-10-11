@@ -1,17 +1,11 @@
+# models/model.py
+
 import torch
-import importlib.util
-import os
-import sys
 import torch.nn as nn
-import torch.nn.functional as F
-import math
-import torch_geometric.nn as pyg_nn
-from torch_geometric.utils import scatter as pyg_scatter
-import warnings
 from torch_geometric.nn import knn_graph, knn_interpolate, fps
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import softmax as pyg_softmax
-
+import math
 
 class VirtualNode(nn.Module):
     """
@@ -119,7 +113,7 @@ class Stage(nn.Module):
             layers.append(AdaptiveGraphTransformerBlock(current_input_dim, hidden_dim, dropout_param))
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, x, pos, edge_index, batch):
+    def forward(self, x, pos, edge_index):
         if x.size(0) == 0:
             return x
         for layer in self.layers:
@@ -159,54 +153,44 @@ class Encoder(nn.Module):
             current_dim = stage_cfg['hidden_dim']
 
     def forward(self, x, pos, labels, batch):
-        features = [x]
-        positions = [pos]
-        sampled_labels = [labels]
-        batches = [batch]
+        features_list = [x]
+        positions_list = [pos]
+        labels_list = [labels]
+        batches_list = [batch]
+
+        current_x, current_pos, current_labels, current_batch = x, pos, labels, batch
 
         for stage_idx, (stage, virtual_node, ratio) in enumerate(zip(self.stages, self.virtual_nodes, self.downsampling_ratios)):
-            
-            # نمونه‌برداری کاهشی (Downsampling) برای مراحل بعد از اول
             if stage_idx > 0:
-                x, pos, labels, batch = self._downsample(x, pos, labels, batch, ratio)
+                current_x, current_pos, current_labels, current_batch = self._downsample(
+                    current_x, current_pos, current_labels, current_batch, ratio
+                )
 
-            if x.size(0) == 0:
-                print(f"🛑 هشدار: اجرای Encoder به دلیل صفر شدن تعداد نقاط در Stage {stage_idx} متوقف شد.")
-                break
+            if current_x.size(0) == 0: break
             
             if isinstance(stage, nn.Sequential):
-                x = stage(x)
+                current_x = stage(current_x)
             else:
-                # بهبود: k را به صورت ایمن تنظیم می‌کنیم تا از تعداد نقاط بیشتر نباشد
-                k_safe = min(self.knn_param, x.size(0) -1) # k باید از N کوچکتر باشد
+                k_safe = min(self.knn_param, current_x.size(0) - 1)
                 if k_safe > 0:
-                    edge_index = knn_graph(pos, k=k_safe, batch=batch, loop=False)
-                    x = stage(x, pos, edge_index, batch)
+                    edge_index = knn_graph(current_pos, k=k_safe, batch=current_batch, loop=False)
+                    current_x = stage(current_x, current_pos, edge_index)
             
-            x = virtual_node(x)
+            current_x = virtual_node(current_x)
             
-            features.append(x)
-            positions.append(pos)
-            sampled_labels.append(labels)
-            batches.append(batch)
-
-        return features, positions, sampled_labels, batches
-
+            features_list.append(current_x)
+            positions_list.append(current_pos)
+            labels_list.append(current_labels)
+            batches_list.append(current_batch)
+            
+        return features_list, positions_list, labels_list, batches_list
+    
     def _downsample(self, x, pos, labels, batch, ratio):
-        if ratio is None or ratio >= 1.0:
+        if ratio is None or ratio >= 1.0 or x.size(0) == 0:
             return x, pos, labels, batch
         
-        #num_points_to_keep = int(x.size(0) * ratio)
-        #if num_points_to_keep < 1:
-        #    return torch.empty(0, x.size(1), device=x.device), \
-        #           torch.empty(0, 3, device=pos.device), \
-        #           torch.empty(0, device=labels.device), \
-        #           torch.empty(0, device=batch.device)
-        
-        # بهبود: استفاده از تابع fps استاندارد از PyG
-        # fps فقط به batch نیاز دارد تا نقاط را به صورت جداگانه برای هر نمونه در بچ نمونه‌برداری کند
         mask = fps(pos, batch, ratio=ratio)
-        return x[mask], pos[mask], labels[mask], batch[mask]
+        return x[mask], pos[mask], labels[mask], batch[mask] if batch is not None else None
 
 # بهبود: رفع کامل خطای CUDA با جایگزینی پیاده‌سازی دستی با knn_interpolate
 class InterpolationStage(nn.Module):
@@ -314,25 +298,22 @@ class ASGFormer(nn.Module):
         )
         self._initialize_weights()
 
-    def forward(self, x, pos, labels, batch):
+    def forward(self, data):
+        # ✅ اصلاح: ورودی مدل اکنون آبجکت data از PyG است
+        x, pos, labels, batch = data.x, data.pos, data.y, data.batch
+
+        # ✅ اصلاح: x شامل ۹ ویژگی و pos شامل ۳ ویژگی است
         x_emb = self.x_mlp(x)
         pos_emb = self.pos_mlp(pos)
         combined_features = x_emb + pos_emb 
         
-        # در انکودر، ما ویژگی‌های اصلی (قبل از اولین MLP) را هم ذخیره می‌کنیم
-        # چون دیکودر به آنها برای اتصال کوتاه نیاز دارد
-        initial_features = combined_features
-        initial_pos = pos
-        initial_labels = labels
+        encoder_features, positions, sampled_labels, batches = self.encoder(combined_features, pos, labels, batch)
         
-        encoder_features_list, positions_list, sampled_labels_list, batches_list  = self.encoder(combined_features, pos, labels, batch)
+        logits, _ = self.decoder(encoder_features, positions, sampled_labels, batches)
         
-        # اصلاح: انکودر ما در پیاده‌سازی جدید، ویژگی‌های اولیه را هم در لیست خروجی‌اش دارد.
-        # پس نیازی به ارسال جداگانه نیست.
-        
-        logits, final_labels = self.decoder(encoder_features_list, positions_list, sampled_labels_list, batches_list)
-        return logits, final_labels
-
+        # ✅ اصلاح: خروجی labels باید labels اصلی باشد
+        return logits, labels
+    
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
