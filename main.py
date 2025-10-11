@@ -5,6 +5,7 @@ from models.model import ASGFormer
 from data.dataset import PointCloudProcessor, H5Dataset, read_file_list, compute_class_weights_from_dataset
 from train import train_model
 from configs.env_config import CONFIG
+import os
 
 def main():
     hyperparams = {
