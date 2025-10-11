@@ -9,6 +9,7 @@ from data.dataset import H5Dataset, PointCloudProcessor, read_file_list, compute
 from train import train_model
 from configs.env_config import CONFIG
 import os
+import h5py
 
 def main():
     main_output_dim = 13
