@@ -9,9 +9,8 @@ from collections import Counter
 
 
 class PointCloudProcessor:
-    def __init__(self, num_points, knn_param, use_cache=True):
+    def __init__(self, num_points, use_cache=True):
         self.num_points = num_points
-        self.knn_param = knn_param
         #self.scaler = StandardScaler()
         self.scaler_points = StandardScaler()
         self.scaler_rgb = MinMaxScaler(feature_range=(0, 1))
