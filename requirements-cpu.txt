@@ -1,0 +1,21 @@
+# PyTorch for CPU
+# This line installs the CPU-only versions of PyTorch and torchvision
+torch
+torchvision
+torchaudio
+
+# PyTorch Geometric Dependencies for CPU
+# This link points to wheels compiled for PyTorch 2.3.0 and CPU
+--find-links https://data.pyg.org/whl/torch-2.3.0+cpu.html
+torch_geometric
+torch_scatter
+torch_sparse
+torch_cluster
+torch_spline_conv
+
+# Other essential libraries
+open3d
+h5py
+pandas
+tqdm
+unrar
