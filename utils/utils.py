@@ -29,22 +29,18 @@ def load_checkpoint(model, checkpoint_path, optimizer=None, for_training=False):
     if not os.path.exists(checkpoint_path):
         print(f"فایل checkpoint '{checkpoint_path}' یافت نشد. آموزش از ابتدا آغاز می‌شود.")
         return model, optimizer, 0, [], []
-    try:
-        print("checkpoint_path=>",checkpoint_path)
+    try:        
         # ✅ بهترین تمرین: بارگذاری روی CPU برای جلوگیری از خطای حافظه GPU
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        print("checkpoint=>1")
         
         # نکته: strict=True برای ادامه آموزش بهتر است تا مطمئن شوید معماری تغییر نکرده
         model.load_state_dict(checkpoint['model_state_dict'], strict=True) 
-        print("checkpoint['model_state_dict']=>2")
         start_epoch = checkpoint.get('epoch', 0)
         train_losses = checkpoint.get('train_losses', [])
         val_losses = checkpoint.get('val_losses', [])
-        print("checkpoint3=>")
         if for_training and optimizer is not None:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            print("checkpoint4=>")
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])            
+        
         print(f"مدل از epoch {start_epoch} بارگذاری شد. آخرین Loss: {train_losses[-1] if train_losses else 'N/A'}")
         return model, optimizer, start_epoch, train_losses, val_losses
     except Exception as e:
