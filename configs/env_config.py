@@ -8,7 +8,7 @@ import torch
 IS_COLAB = os.getenv('COLAB_ENV') == '1'
 IS_LOCAL = not IS_COLAB
 
-print("IS_COLAB =>", IS_COLAB)
+#print("IS_COLAB =>", IS_COLAB)
 
 # تنظیمات پایه
 BASE_CONFIG = {

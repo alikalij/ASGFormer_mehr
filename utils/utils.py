@@ -10,7 +10,7 @@ def save_checkpoint(model, optimizer, epoch, train_losses, val_losses, base_dir,
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # ✅ بهبود: حذف خط اضافی و ساخت مسیر به صورت استاندارد
     checkpoint_path = os.path.join(base_dir, f"{filename_prefix}_epoch{epoch}_{timestamp}.pth")
-
+    print("model.state_dict()=>",model.state_dict())
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
