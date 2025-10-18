@@ -14,10 +14,10 @@ IS_LOCAL = not IS_COLAB
 BASE_CONFIG = {
     # پارامترهای مشترک
     'main_output_dim': 13,
-    'batch_size': 2,
+    'batch_size': 8,
     'num_epochs': 40,
     'learning_rate': 1e-3,
-    'knn_param': 4,
+    'knn_param': 16,
     'num_points': 4096,
     'dropout_param': 0.1,
     'weight_decay': 0.05, #1e-3,
