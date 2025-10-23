@@ -14,7 +14,22 @@ from utils.utils import load_checkpoint_dynamic
 from utils.metrics import calculate_final_metrics # تابع جدید برای نتایج نهایی
 
 # نقشه رنگ S3DIS (مانند قبل)
-S3DIS_COLOR_MAP = np.array([...]) / 255.0
+S3DIS_COLOR_MAP = np.array([
+    [152, 223, 138],  # 0: ceiling
+    [174, 199, 232],  # 1: floor
+    [31, 119, 180],   # 2: wall
+    [255, 187, 120],  # 3: beam
+    [188, 189, 34],   # 4: column
+    [140, 86, 75],    # 5: window
+    [255, 152, 150],  # 6: door
+    [214, 39, 40],    # 7: table
+    [197, 176, 213],  # 8: chair
+    [148, 103, 189],  # 9: sofa
+    [196, 156, 148],  # 10: bookcase
+    [23, 190, 207],   # 11: board
+    [247, 182, 210],  # 12: clutter
+    # اگر کلاس‌های بیشتری دارید، رنگ‌های بیشتری اضافه کنید
+]) / 255.0  # نرمال‌سازی به بازه [0, 1]
 
 class Evaluator:
     def __init__(self, config):
@@ -94,26 +109,55 @@ class Evaluator:
     def visualize(self, dataloader, num_samples=3):
         print(f"در حال آماده‌سازی برای بصری‌سازی {num_samples} نمونه...")
         samples_processed = 0
-        with torch.no_grad():
-            for data in dataloader:
-                if samples_processed >= num_samples: break
-                
-                data = data.to(self.device)
-                outputs, labels = self.model(data)
-                preds = torch.argmax(outputs, dim=1)
+        # 💡 بهبود: استفاده از try-except برای مدیریت خطای احتمالی Open3D
+        try:
+            with torch.no_grad():
+                for data in dataloader:
+                    if samples_processed >= num_samples: break
+                    
+                    data = data.to(self.device)
+                    # 💡 نکته: مطمئن شوید مدل در حالت eval است (در __init__ انجام شده)
+                    outputs, labels = self.model(data) 
+                    preds = torch.argmax(outputs, dim=1)
 
-                points = data.pos.cpu().numpy()
-                true_labels = labels.cpu().numpy()
-                pred_labels = preds.cpu().numpy()
+                    points = data.pos.cpu().numpy()
+                    true_labels = labels.cpu().numpy()
+                    pred_labels = preds.cpu().numpy()
 
-                # ساخت ابر نقاط Open3D (مانند قبل)
-                gt_pcd = o3d.geometry.PointCloud()
-                # ... (تنظیم points و colors برای gt_pcd)
-                pred_pcd = o3d.geometry.PointCloud()
-                # ... (تنظیم points و colors برای pred_pcd)
-                pred_pcd.translate((np.max(points[:, 0]) - np.min(points[:, 0]) + 1.0, 0, 0))
+                    # --- ساخت ابر نقاط Open3D ---
+                    
+                    # ابر نقاط Ground Truth (واقعی)
+                    gt_pcd = o3d.geometry.PointCloud()
+                    gt_pcd.points = o3d.utility.Vector3dVector(points)
+                    # ✅ تکمیل شده: تنظیم رنگ‌ها بر اساس برچسب واقعی
+                    # جلوگیری از خطای ایندکس اگر برچسبی خارج از محدوده باشد
+                    valid_gt_labels = np.clip(true_labels, 0, S3DIS_COLOR_MAP.shape[0] - 1)
+                    gt_pcd.colors = o3d.utility.Vector3dVector(S3DIS_COLOR_MAP[valid_gt_labels])
 
-                print(f"\nنمایش نمونه {samples_processed + 1}: Left=GT, Right=Pred")
-                o3d.visualization.draw_geometries([gt_pcd, pred_pcd], window_name=f"Sample {samples_processed + 1}")
-                
-                samples_processed += 1
+                    # ابر نقاط Prediction (پیش‌بینی مدل)
+                    pred_pcd = o3d.geometry.PointCloud()
+                    pred_pcd.points = o3d.utility.Vector3dVector(points)
+                    # ✅ تکمیل شده: تنظیم رنگ‌ها بر اساس پیش‌بینی مدل
+                    valid_pred_labels = np.clip(pred_labels, 0, S3DIS_COLOR_MAP.shape[0] - 1)
+                    pred_pcd.colors = o3d.utility.Vector3dVector(S3DIS_COLOR_MAP[valid_pred_labels])
+                    
+                    # انتقال ابر نقاط پیش‌بینی شده به کنار ابر نقاط واقعی
+                    translation_vector = np.array([(np.max(points[:, 0]) - np.min(points[:, 0])) * 1.1, 0, 0])
+                    pred_pcd.translate(translation_vector)
+
+                    # --- نمایش ---
+                    print(f"\nنمایش نمونه {samples_processed + 1} (پنجره Open3D باز می‌شود):")
+                    print("  ابر نقاط سمت چپ: Ground Truth (واقعی)")
+                    print("  ابر نقاط سمت راست: Prediction (پیش‌بینی مدل)")
+                    o3d.visualization.draw_geometries(
+                        [gt_pcd, pred_pcd], 
+                        window_name=f"Sample {samples_processed + 1} | Left: GT, Right: Pred",
+                        width=1280, height=720
+                    )
+                    
+                    samples_processed += 1
+        except ImportError:
+             print("\nخطا: کتابخانه open3d نصب نشده یا به درستی import نشده است.")
+             print("برای استفاده از بصری‌سازی، لطفاً open3d را نصب کنید: pip install open3d")
+        except Exception as e:
+            print(f"\nخطا در هنگام بصری‌سازی: {e}")
