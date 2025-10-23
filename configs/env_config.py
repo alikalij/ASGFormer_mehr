@@ -29,7 +29,7 @@ CONFIG = {
     # هایپرپارامترهای آموزش
     'learning_rate': 1e-3, 
     'batch_size': 4,       
-    'num_epochs': 40,
+    'num_epochs': 120,
     'weight_decay': 1e-4, # مقدار رایج‌تر برای AdamW
     'accumulation_steps': 4, # انباشت گرادیان
     
