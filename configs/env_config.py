@@ -11,9 +11,10 @@ print(f"Running in {'Colab' if IS_COLAB else 'Local'} environment.")
 # --- مسیرهای اصلی ---
 # استفاده از Path برای سازگاری بهتر بین سیستم‌عامل‌ها
 PROJECT_ROOT = Path(__file__).parent.parent # مسیر ریشه پروژه
-BASE_DIR = Path("/content/drive/MyDrive") if IS_COLAB else PROJECT_ROOT
+BASE_DIR = Path("/content") if IS_COLAB else PROJECT_ROOT
 DRIVE_DIR = Path("/content/drive/MyDrive") if IS_COLAB else PROJECT_ROOT
-
+print("BASE_DIR=>",BASE_DIR)
+print("DRIVE_DIR=>",DRIVE_DIR)
 # --- تنظیمات اصلی پروژه ---
 CONFIG = {
     # تنظیمات محیط و دستگاه
