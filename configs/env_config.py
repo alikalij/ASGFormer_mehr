@@ -20,7 +20,7 @@ CONFIG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     
     # تنظیمات دیتاست
-    'dataset_path': BASE_DIR / 'datasets' / 's3dis' / 's3dis-mini', # مسیر دیتاست با pathlib
+    'dataset_path': BASE_DIR / 'datasets' / 's3dis' / 's3dis', # مسیر دیتاست با pathlib
     'num_points': 4096,
     'num_classes': 13,
     'feature_dim': 9, # XYZRGB + Normals
