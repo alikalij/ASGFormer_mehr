@@ -40,8 +40,15 @@ def main():
         knn_param=hyperparams['knn_param'],
         dropout_param=hyperparams['dropout_param']
     )
-    # مدل هنوز به device منتقل نمی‌شود، Trainer این کار را انجام می‌دهد.
-
+    try:
+        if int(torch.__version__.split('.')[0]) >= 2:
+             print("Applying torch.compile...")
+             model = torch.compile(model)
+        else:
+             print("torch.compile requires PyTorch 2.0 or later.")
+    except Exception as e:
+        print(f"Warning: Failed to apply torch.compile: {e}")
+        
     # --- تعریف تابع هزینه، بهینه‌ساز و زمان‌بند ---
     print("Setting up criterion, optimizer, and scheduler...")
     # محاسبه وزن‌ها فقط یک بار

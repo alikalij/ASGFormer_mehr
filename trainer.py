@@ -90,7 +90,7 @@ class Trainer:
         
         return avg_loss, oa, miou
 
-    def _validate_epoch(self):
+    def _validate_epoch(self, epoch):
         self.model.eval()
         total_loss = 0.0
         total_correct = 0
@@ -98,7 +98,7 @@ class Trainer:
         total_intersection = torch.zeros(self.num_classes, device=self.device)
         total_union = torch.zeros(self.num_classes, device=self.device)
 
-        val_loop = tqdm(self.val_loader, desc=f"Epoch {self.start_epoch + len(self.train_losses)+1}/{self.config['num_epochs']} [Val]")
+        val_loop = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{self.config['num_epochs']} [Val]")        
         with torch.no_grad():
             for batch in val_loop:
                 batch = batch.to(self.device)

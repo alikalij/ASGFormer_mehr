@@ -2,10 +2,10 @@
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import knn_graph, knn_interpolate, fps
-from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import softmax as pyg_softmax
 import math
+from torch_geometric.nn import MessagePassing, knn_graph, fps, knn, KPConv # ✅ KPConv اضافه شد
+from torch_geometric.utils import softmax as pyg_softmax
+from torch_geometric.nn import scatter as pyg_scatter
 
 class VirtualNode(nn.Module):
     """
@@ -271,49 +271,109 @@ class Decoder(nn.Module):
         return self.final_mlp(x), final_labels
 
 class ASGFormer(nn.Module):
-    def __init__(self, feature_dim, main_input_dim, main_output_dim, stages_config, knn_param, dropout_param=0.1):
+    def __init__(self, feature_dim, main_input_dim, main_output_dim, stages_config, knn_param, dropout_param=0.1, kpconv_radius=0.1, kpconv_kernel_size=15):
+        """
+        Args:
+            kpconv_radius (float): شعاع برای لایه KPConv اولیه.
+            kpconv_kernel_size (int): تعداد نقاط کرنل برای KPConv اولیه.
+        """
         super(ASGFormer, self).__init__()
         
+        # --- ۱. انکودر اولیه KPConv ---
+        # ابعاد خروجی این لایه (kpconv_output_dim) یک هایپرپارامتر جدید است
+        kpconv_output_dim = 64
+        print(f"Initializing KPConv layer with in_channels={feature_dim}, out_channels={kpconv_output_dim}, radius={kpconv_radius}")
+        self.initial_kpconv = KPConv(
+            in_channels=feature_dim,        # ورودی: 9 ویژگی خام
+            out_channels=kpconv_output_dim, # خروجی: 64 ویژگی غنی‌شده محلی
+            dim=3,
+            kernel_size=kpconv_kernel_size,
+            radius=kpconv_radius,
+            aggr='mean' # یا aggr='add'
+        )
+        # 💡 نکته: ممکن است بخواهید یک LayerNorm یا ReLU بعد از KPConv اضافه کنید
+        self.kpconv_norm = nn.LayerNorm(kpconv_output_dim)
+
+        # --- ۲. MLPهای اصلی برای эмبدینگ ---
+        print(f"Initializing Embedding MLPs: x_mlp input={kpconv_output_dim}, pos_mlp input=3, output={main_input_dim}")
+        # ✅ ورودی x_mlp اکنون خروجی KPConv است (kpconv_output_dim)
         self.x_mlp = nn.Sequential(
-            nn.Linear(feature_dim, main_input_dim),
+            nn.Linear(kpconv_output_dim, main_input_dim),
             nn.ReLU(),
             nn.LayerNorm(main_input_dim)
-        )
+        )        
+        
         self.pos_mlp = nn.Sequential(
             nn.Linear(3, main_input_dim),
             nn.ReLU(),
             nn.LayerNorm(main_input_dim)
         )
+
+        # --- ۳. انکودر اصلی ASGFormer ---
+        print(f"Initializing Main Encoder with input_dim={main_input_dim}")
         self.encoder = Encoder(
-            input_dim=main_input_dim,
+            input_dim=main_input_dim, # ورودی انکودر اصلی main_input_dim است
             stages_config=stages_config,
             knn_param=knn_param,
             dropout_param=dropout_param
         )
+
+        # --- ۴. دیکودر اصلی ASGFormer ---
+        print("Initializing Main Decoder...")
         self.decoder = Decoder(
             main_output_dim=main_output_dim,
             stages_config=stages_config,
             knn_param=knn_param,
             dropout_param=dropout_param
         )
+
+        # --- ۵. مقداردهی اولیه وزن‌ها ---
         self._initialize_weights()
+        print("Model Initialization Complete.")
+        
 
     def forward(self, data):
         # ✅ اصلاح: ورودی مدل اکنون آبجکت data از PyG است
-        x, pos, labels, batch = data.x, data.pos, data.y, data.batch
+        x_initial, pos, labels, batch = data.x, data.pos, data.y, data.batch
+        # x_initial: [N, 9], pos: [N, 3], labels: [N], batch: [N]
 
-        # ✅ اصلاح: x شامل ۹ ویژگی و pos شامل ۳ ویژگی است
-        x_emb = self.x_mlp(x)
-        pos_emb = self.pos_mlp(pos)
-        combined_features = x_emb + pos_emb 
+        # --- ۱. اجرای انکودر اولیه KPConv ---
+        # KPConv ویژگی‌های محلی غنی‌شده را استخراج می‌کند
+        # ورودی: x_initial (9 بعدی), pos, batch
+        # خروجی: x_encoded (64 بعدی)
+        # print(f"KPConv Input shapes: x={x_initial.shape}, pos={pos.shape}, batch={batch.shape if batch is not None else 'None'}")
+        x_encoded = self.initial_kpconv(x=x_initial, pos=pos, batch=batch)
+        x_encoded = self.kpconv_norm(x_encoded) # اعمال نرمال‌سازی
+        # print(f"KPConv Output shape: {x_encoded.shape}") # Should be [N, 64]
+
+        # --- ۲. اجرای MLPهای اصلی برای эмبدینگ ---
+        # ✅ x_mlp اکنون روی خروجی KPConv کار می‌کند
+        x_emb = self.x_mlp(x_encoded) # ورودی: [N, 64], خروجی: [N, main_input_dim=32]
+        # pos_mlp همچنان روی pos اصلی کار می‌کند
+        pos_emb = self.pos_mlp(pos)   # ورودی: [N, 3], خروجی: [N, main_input_dim=32]
+        # print(f"Embedding shapes: x_emb={x_emb.shape}, pos_emb={pos_emb.shape}")
         
+        # ترکیب دو эмبدینگ
+        combined_features = x_emb + pos_emb # [N, main_input_dim=32]
+        # print(f"Combined features shape: {combined_features.shape}")
+        
+        # --- ۳. اجرای انکودر و دیکودر اصلی ASGFormer ---
+        # انکودر اصلی ویژگی‌های ترکیب‌شده و pos اصلی را دریافت می‌کند
+        # print("Entering Main Encoder...")
         encoder_features, positions, sampled_labels, batches = self.encoder(combined_features, pos, labels, batch)
-        
-        logits, _ = self.decoder(encoder_features, positions, sampled_labels, batches)
-        
-        # ✅ اصلاح: خروجی labels باید labels اصلی باشد
+        # print("Exited Main Encoder. Entering Main Decoder...")
+
+        # 💡 نکته: اگر KPConv داون‌سمپلینگ انجام می‌داد، باید skip connections دیکودر را تنظیم می‌کردیم.
+        # اما KPConv ساده، تعداد نقاط را تغییر نمی‌دهد.
+
+        logits, final_labels_from_decoder = self.decoder(encoder_features, positions, sampled_labels, batches)
+        # print("Exited Main Decoder.")
+        # print(f"Logits shape: {logits.shape}, Final Labels shape: {final_labels_from_decoder.shape}")
+
+        # ✅ خروجی باید labels اصلی باشد، نه برچسب‌های داون‌سمپل شده
         return logits, labels
-    
+            
+        
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -323,3 +383,8 @@ class ASGFormer(nn.Module):
             elif isinstance(m, nn.LayerNorm):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
+            # 💡 بهبود: می‌توان مقداردهی اولیه خاصی برای KPConv اضافه کرد (اختیاری)
+            elif isinstance(m, KPConv):
+                 nn.init.xavier_uniform_(m.weight)
+                 if m.bias is not None:
+                     nn.init.zeros_(m.bias)
