@@ -1,4 +1,5 @@
 import os
+import re # برای عبارت منظم
 import torch
 from datetime import datetime
 
@@ -51,15 +52,39 @@ def find_latest_checkpoint(directory, prefix="agtransformer"):
     """پیدا کردن آخرین checkpoint در دایرکتوری مشخص شده."""
     if not os.path.isdir(directory):
         return None
-        
-    # ✅ اصلاح: جستجو بر اساس پیشوند صحیح و کامل‌تر
-    checkpoint_files = [f for f in os.listdir(directory) if f.startswith(f"{prefix}_epoch") and f.endswith('.pth')]
-    if not checkpoint_files:
+    
+    # الگوی عبارت منظم برای یافتن (Epoch) و (Timestamp) در نام فایل
+    # مثال: agtransformer_epoch(66)_(20251025_091436).pth
+    # (P<epoch>...) نام گروهی برای استخراج Epoch است
+    pattern = re.compile(rf"^{prefix}_epoch(?P<epoch>\d+)_(?P<timestamp>\d{{8}}_\d{{6}}).pth$")
+    
+    checkpoint_data = []
+
+    for filename in os.listdir(directory):
+        match = pattern.match(filename)
+        if match:
+            # استخراج عدد Epoch و Timestamp به صورت جداگانه
+            epoch_num = int(match.group('epoch'))
+            timestamp_str = match.group('timestamp')
+            
+            checkpoint_data.append({
+                'filename': filename,
+                'epoch': epoch_num,
+                'timestamp': timestamp_str,
+            })
+            
+    if not checkpoint_data:
         return None
-        
-    # مرتب‌سازی بر اساس نام فایل (که شامل تاریخ و epoch است) آخرین فایل را پیدا می‌کند
-    latest_file = max(checkpoint_files)
-    return os.path.join(directory, latest_file)
+    
+    # مرتب‌سازی:
+    # 1. اولویت با 'epoch' (بزرگترین Epoch)
+    # 2. در صورت مساوی بودن Epoch، اولویت با 'timestamp' (جدیدترین زمان)
+    latest_checkpoint = max(
+        checkpoint_data, 
+        key=lambda x: (x['epoch'], x['timestamp'])
+    )
+    
+    return os.path.join(directory, latest_checkpoint['filename'])
 
 def load_checkpoint_dynamic(model, directory, optimizer=None, for_training=False):
     checkpoint_path = find_latest_checkpoint(directory)
