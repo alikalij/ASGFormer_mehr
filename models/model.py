@@ -3,9 +3,9 @@
 import torch
 import torch.nn as nn
 import math
-from torch_geometric.nn import MessagePassing, knn_graph, fps, knn, KPConv # ✅ KPConv اضافه شد
+from torch_geometric.nn import MessagePassing, knn_graph, fps, knn
+from torch_geometric.nn.conv import KPConv
 from torch_geometric.utils import softmax as pyg_softmax
-from torch_geometric.nn import scatter as pyg_scatter
 
 class VirtualNode(nn.Module):
     """
