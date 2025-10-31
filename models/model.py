@@ -3,7 +3,8 @@
 import torch
 import torch.nn as nn
 import math
-from torch_geometric.nn import EdgeConv,MessagePassing, knn_graph, fps, knn
+from torch_geometric.nn import EdgeConv,MessagePassing
+from torch_geometric.nn import knn_interpolate, knn_graph, fps, knn
 from torch_geometric.utils import softmax as pyg_softmax
 
 class VirtualNode(nn.Module):
