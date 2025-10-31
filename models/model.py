@@ -3,8 +3,7 @@
 import torch
 import torch.nn as nn
 import math
-from torch_geometric.nn import MessagePassing, knn_graph, fps, knn
-from torch_geometric.nn.conv import KPConv
+from torch_geometric.nn import EdgeConv,MessagePassing, knn_graph, fps, knn
 from torch_geometric.utils import softmax as pyg_softmax
 
 class VirtualNode(nn.Module):
@@ -279,6 +278,26 @@ class ASGFormer(nn.Module):
         """
         super(ASGFormer, self).__init__()
         
+        # --- ۱. انکودر اولیه EdgeConv (جایگزین KPConv) ---
+        edgeconv_output_dim = 64 # ابعاد خروجی انکودر اولیه
+        
+        # EdgeConv یک MLP را به عنوان ورودی می‌گیرد تا روی یال‌ها اعمال شود
+        # ورودی MLP: (2 * feature_dim) -> (ویژگی نقطه مرکزی + ویژگی همسایه)
+        # 💡 نکته: ما از (2 * (feature_dim + 3)) استفاده می‌کنیم تا pos را هم صریحا در نظر بگیریم
+        # این کار به EdgeConv قدرت بیشتری در درک هندسه می‌دهد.
+        
+        # ما از یک MLP ساده برای EdgeConv استفاده می‌کنیم:
+        initial_encoder_nn = nn.Sequential(
+            nn.Linear(2 * (feature_dim + 3), edgeconv_output_dim), # (2 * (9+3)) = 24
+            nn.ReLU(),
+            nn.LayerNorm(edgeconv_output_dim)
+        )
+
+        print(f"Initializing EdgeConv layer with input MLP: 2*({feature_dim}+3) -> {edgeconv_output_dim}")
+        # ✅ استفاده از لایه EdgeConv که می‌دانیم در محیط شما وجود دارد
+        self.initial_encoder_conv = EdgeConv(nn=initial_encoder_nn, aggr='max')
+        self.initial_encoder_norm = nn.LayerNorm(edgeconv_output_dim)
+        
         # --- ۱. انکودر اولیه KPConv ---
         # ابعاد خروجی این لایه (kpconv_output_dim) یک هایپرپارامتر جدید است
         kpconv_output_dim = 64
@@ -295,10 +314,10 @@ class ASGFormer(nn.Module):
         self.kpconv_norm = nn.LayerNorm(kpconv_output_dim)
 
         # --- ۲. MLPهای اصلی برای эмبدینگ ---
-        print(f"Initializing Embedding MLPs: x_mlp input={kpconv_output_dim}, pos_mlp input=3, output={main_input_dim}")
+        print(f"Initializing Embedding MLPs: x_mlp input={edgeconv_output_dim}, pos_mlp input=3, output={main_input_dim}")
         # ✅ ورودی x_mlp اکنون خروجی KPConv است (kpconv_output_dim)
         self.x_mlp = nn.Sequential(
-            nn.Linear(kpconv_output_dim, main_input_dim),
+            nn.Linear(edgeconv_output_dim, main_input_dim),
             nn.ReLU(),
             nn.LayerNorm(main_input_dim)
         )        
@@ -337,13 +356,32 @@ class ASGFormer(nn.Module):
         x_initial, pos, labels, batch = data.x, data.pos, data.y, data.batch
         # x_initial: [N, 9], pos: [N, 3], labels: [N], batch: [N]
 
+        # --- ۱. اجرای انکودر اولیه EdgeConv ---        
+        # 💡 EdgeConv به یک گراف همسایگی (edge_index) نیاز دارد
+        # ما آن را با knn_graph (که می‌دانیم کار می‌کند) می‌سازیم
+        # از همان k_param که برای انکودر اصلی استفاده می‌شود، بهره می‌بریم.
+        k = self.encoder.knn_param # گرفتن k از انکودر (e.g., 16)
+        k_safe = min(k, x_initial.size(0) - 1)
+        if k_safe <= 0: k_safe = 1 # حداقل 1 همسایه
+
+        edge_index = knn_graph(pos, k=k_safe, batch=batch, loop=False)
+
+        # 💡 ترکیب X و Pos برای ورودی غنی‌تر به EdgeConv
+        # این کار به MLP داخل EdgeConv اجازه می‌دهد هم ویژگی‌ها و هم موقعیت را ببیند
+        combined_x_pos = torch.cat([x_initial, pos], dim=-1) # [N, 12]
+
+        # اجرای EdgeConv
+        # ورودی: (x, edge_index) -> (ویژگی‌ها، گراف)
+        x_encoded = self.initial_encoder_conv(x=combined_x_pos, edge_index=edge_index)
+        x_encoded = self.initial_encoder_norm(x_encoded) # [N, 64]
+
         # --- ۱. اجرای انکودر اولیه KPConv ---
         # KPConv ویژگی‌های محلی غنی‌شده را استخراج می‌کند
         # ورودی: x_initial (9 بعدی), pos, batch
         # خروجی: x_encoded (64 بعدی)
         # print(f"KPConv Input shapes: x={x_initial.shape}, pos={pos.shape}, batch={batch.shape if batch is not None else 'None'}")
-        x_encoded = self.initial_kpconv(x=x_initial, pos=pos, batch=batch)
-        x_encoded = self.kpconv_norm(x_encoded) # اعمال نرمال‌سازی
+        x_encoded2 = self.initial_kpconv(x=x_initial, pos=pos, batch=batch)
+        x_encoded2 = self.kpconv_norm(x_encoded2) # اعمال نرمال‌سازی
         # print(f"KPConv Output shape: {x_encoded.shape}") # Should be [N, 64]
 
         # --- ۲. اجرای MLPهای اصلی برای эмبدینگ ---

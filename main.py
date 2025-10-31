@@ -39,6 +39,11 @@ def main():
         stages_config=hyperparams['stages_config'], 
         knn_param=hyperparams['knn_param'],
         dropout_param=hyperparams['dropout_param']
+        # ✅ ارسال پارامترهای جدید KPConv به مدل
+        kpconv_radius=hyperparams['kpconv_radius'],
+        kpconv_kernel_size=hyperparams['kpconv_kernel_size']
+        # 💡 نکته: ابعاد خروجی KPConv (64) و ورودی x_mlp (32)
+        # در داخل کلاس ASGFormer مدیریت شده‌اند و نیازی به ارسال ندارند.
     )
     try:
         if int(torch.__version__.split('.')[0]) >= 2:
