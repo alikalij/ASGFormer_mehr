@@ -131,7 +131,7 @@ class Trainer:
             train_loss, train_oa, train_miou = self._train_epoch(epoch)
             self.train_losses.append(train_loss)
             
-            val_loss, val_oa, val_miou = self._validate_epoch()
+            val_loss, val_oa, val_miou = self._validate_epoch(epoch)
             self.val_losses.append(val_loss)
 
             if self.scheduler:
