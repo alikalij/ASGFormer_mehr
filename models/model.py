@@ -422,7 +422,7 @@ class ASGFormer(nn.Module):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
             # 💡 بهبود: می‌توان مقداردهی اولیه خاصی برای KPConv اضافه کرد (اختیاری)
-            elif isinstance(m, KPConv):
-                 nn.init.xavier_uniform_(m.weight)
-                 if m.bias is not None:
-                     nn.init.zeros_(m.bias)
+            #elif isinstance(m, KPConv):
+            #     nn.init.xavier_uniform_(m.weight)
+            #     if m.bias is not None:
+            #         nn.init.zeros_(m.bias)
