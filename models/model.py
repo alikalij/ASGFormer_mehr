@@ -302,14 +302,14 @@ class ASGFormer(nn.Module):
         # ابعاد خروجی این لایه (kpconv_output_dim) یک هایپرپارامتر جدید است
         kpconv_output_dim = 64
         print(f"Initializing KPConv layer with in_channels={feature_dim}, out_channels={kpconv_output_dim}, radius={kpconv_radius}")
-        self.initial_kpconv = KPConv(
-            in_channels=feature_dim,        # ورودی: 9 ویژگی خام
-            out_channels=kpconv_output_dim, # خروجی: 64 ویژگی غنی‌شده محلی
-            dim=3,
-            kernel_size=kpconv_kernel_size,
-            radius=kpconv_radius,
-            aggr='mean' # یا aggr='add'
-        )
+        #self.initial_kpconv = KPConv(
+        #    in_channels=feature_dim,        # ورودی: 9 ویژگی خام
+        #    out_channels=kpconv_output_dim, # خروجی: 64 ویژگی غنی‌شده محلی
+        #    dim=3,
+        #    kernel_size=kpconv_kernel_size,
+        #    radius=kpconv_radius,
+        #    aggr='mean' # یا aggr='add'
+        #)
         # 💡 نکته: ممکن است بخواهید یک LayerNorm یا ReLU بعد از KPConv اضافه کنید
         self.kpconv_norm = nn.LayerNorm(kpconv_output_dim)
 
@@ -380,8 +380,8 @@ class ASGFormer(nn.Module):
         # ورودی: x_initial (9 بعدی), pos, batch
         # خروجی: x_encoded (64 بعدی)
         # print(f"KPConv Input shapes: x={x_initial.shape}, pos={pos.shape}, batch={batch.shape if batch is not None else 'None'}")
-        x_encoded2 = self.initial_kpconv(x=x_initial, pos=pos, batch=batch)
-        x_encoded2 = self.kpconv_norm(x_encoded2) # اعمال نرمال‌سازی
+        #x_encoded2 = self.initial_kpconv(x=x_initial, pos=pos, batch=batch)
+        #x_encoded2 = self.kpconv_norm(x_encoded2) # اعمال نرمال‌سازی
         # print(f"KPConv Output shape: {x_encoded.shape}") # Should be [N, 64]
 
         # --- ۲. اجرای MLPهای اصلی برای эмبدینگ ---
