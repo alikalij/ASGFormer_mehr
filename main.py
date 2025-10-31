@@ -48,7 +48,7 @@ def main():
     try:
         if int(torch.__version__.split('.')[0]) >= 2:
              print("Applying torch.compile...")
-             model = torch.compile(model)
+             #model = torch.compile(model)
         else:
              print("torch.compile requires PyTorch 2.0 or later.")
     except Exception as e:

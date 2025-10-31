@@ -301,7 +301,7 @@ class ASGFormer(nn.Module):
         # --- ۱. انکودر اولیه KPConv ---
         # ابعاد خروجی این لایه (kpconv_output_dim) یک هایپرپارامتر جدید است
         kpconv_output_dim = 64
-        print(f"Initializing KPConv layer with in_channels={feature_dim}, out_channels={kpconv_output_dim}, radius={kpconv_radius}")
+        #print(f"Initializing KPConv layer with in_channels={feature_dim}, out_channels={kpconv_output_dim}, radius={kpconv_radius}")
         #self.initial_kpconv = KPConv(
         #    in_channels=feature_dim,        # ورودی: 9 ویژگی خام
         #    out_channels=kpconv_output_dim, # خروجی: 64 ویژگی غنی‌شده محلی
