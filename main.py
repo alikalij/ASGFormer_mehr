@@ -38,6 +38,9 @@ def main():
         main_output_dim=hyperparams['num_classes'],
         stages_config=hyperparams['stages_config'], 
         knn_param=hyperparams['knn_param'],
+        num_heads=hyperparams['num_heads'],
+        neighbor_finder=hyperparams['neighbor_finder'], # ✅ ارسال
+        search_radius=hyperparams['search_radius'],     # ✅ ارسال
         dropout_param=hyperparams['dropout_param'],
         # ✅ ارسال پارامترهای جدید KPConv به مدل
         kpconv_radius=hyperparams['kpconv_radius'],

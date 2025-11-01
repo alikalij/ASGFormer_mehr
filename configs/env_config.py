@@ -36,7 +36,12 @@ CONFIG = {
     'main_input_dim': 32, # بعد فضای эмبدینگ اولیه
     'knn_param': 16,       
     'dropout_param': 0.1,
-    
+    'num_heads': 4, # ✅ جدید: تعداد سرها (باید بر main_input_dim و hidden_dims بخش‌پذیر باشد)
+
+    # ✅ جدید: تنظیمات همسایه‌یابی
+    'neighbor_finder': 'knn', # گزینه‌ها: 'knn', 'radius', 'faiss'
+    'search_radius': 0.1,     # شعاع جستجو (فقط برای 'radius')
+
     # ✅ جدید: هایپرپارامترهای لایه KPConv اولیه
     'kpconv_radius': 0.1,        # 💡 بسیار مهم: این مقدار باید بر اساس مقیاس داده تنظیم شود
     'kpconv_kernel_size': 15,    # تعداد نقاط کرنل
@@ -44,14 +49,14 @@ CONFIG = {
     
     # مسیرهای ذخیره‌سازی
     'checkpoint_dir': DRIVE_DIR / "saved_models" , # مسیر checkpoint با pathlib
-
-    # پیکربندی معماری مدل
+    
+    # پیکربندی معماری مدل (ابعاد باید بر num_heads بخش‌پذیر باشند)
     'stages_config': [
-        {'hidden_dim': 32, 'num_layers': 1, 'downsample_ratio': None},
-        {'hidden_dim': 64, 'num_layers': 2, 'downsample_ratio': 0.25},
-        {'hidden_dim': 128, 'num_layers': 4, 'downsample_ratio': 0.25},
-        {'hidden_dim': 256, 'num_layers': 2, 'downsample_ratio': 0.25},
-        {'hidden_dim': 512, 'num_layers': 2, 'downsample_ratio': 0.25},
+        {'hidden_dim': 32, 'num_layers': 1, 'downsample_ratio': None},  # 32/4=8
+        {'hidden_dim': 64, 'num_layers': 2, 'downsample_ratio': 0.25}, # 64/4=16
+        {'hidden_dim': 128, 'num_layers': 4, 'downsample_ratio': 0.25}, # 128/4=32
+        {'hidden_dim': 256, 'num_layers': 2, 'downsample_ratio': 0.25}, # 256/4=64
+        {'hidden_dim': 512, 'num_layers': 2, 'downsample_ratio': 0.25}, # 512/4=128
     ]
 }
 
