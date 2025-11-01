@@ -391,11 +391,11 @@ class ASGFormer(nn.Module):
             nn.LayerNorm(main_input_dim)
         )        
         
-        self.pos_mlp = nn.Sequential(
-            nn.Linear(3, main_input_dim),
-            nn.ReLU(),
-            nn.LayerNorm(main_input_dim)
-        )
+        #self.pos_mlp = nn.Sequential(
+        #    nn.Linear(3, main_input_dim),
+        #    nn.ReLU(),
+        #    nn.LayerNorm(main_input_dim)
+        #)
 
         # --- ۳. انکودر اصلی ASGFormer ---
         print(f"Initializing Main Encoder with input_dim={main_input_dim}")
@@ -458,15 +458,19 @@ class ASGFormer(nn.Module):
 
         # --- ۲. اجرای MLPهای اصلی برای эмبدینگ ---
         # ✅ x_mlp اکنون روی خروجی KPConv کار می‌کند
-        x_emb = self.x_mlp(x_encoded) # ورودی: [N, 64], خروجی: [N, main_input_dim=32]
+        #x_emb = self.x_mlp(x_encoded) # ورودی: [N, 64], خروجی: [N, main_input_dim=32]
         # pos_mlp همچنان روی pos اصلی کار می‌کند
-        pos_emb = self.pos_mlp(pos)   # ورودی: [N, 3], خروجی: [N, main_input_dim=32]
+        #pos_emb = self.pos_mlp(pos)   # ورودی: [N, 3], خروجی: [N, main_input_dim=32]
         # print(f"Embedding shapes: x_emb={x_emb.shape}, pos_emb={pos_emb.shape}")
         
         # ترکیب دو эмبدینگ
-        combined_features = x_emb + pos_emb # [N, main_input_dim=32]
+        #combined_features = x_emb + pos_emb # [N, main_input_dim=32]
         # print(f"Combined features shape: {combined_features.shape}")
         
+        # --- ۲. اجرای MLP اصلی (فقط پروژکشن) ---
+        # ✅ x_emb اکنون همان combined_features است
+        combined_features = self.x_mlp(x_encoded) # ورودی: [N, 64], خروجی: [N, 32]
+
         # --- ۳. اجرای انکودر و دیکودر اصلی ASGFormer ---
         # انکودر اصلی ویژگی‌های ترکیب‌شده و pos اصلی را دریافت می‌کند
         # print("Entering Main Encoder...")
