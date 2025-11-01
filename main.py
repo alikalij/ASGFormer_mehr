@@ -41,6 +41,7 @@ def main():
         num_heads=hyperparams['num_heads'],
         neighbor_finder=hyperparams['neighbor_finder'], # ✅ ارسال
         search_radius=hyperparams['search_radius'],     # ✅ ارسال
+        interpolation_k=hyperparams['interpolation_k'],
         dropout_param=hyperparams['dropout_param'],
         # ✅ ارسال پارامترهای جدید KPConv به مدل
         kpconv_radius=hyperparams['kpconv_radius'],

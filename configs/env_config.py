@@ -34,7 +34,8 @@ CONFIG = {
     
     # هایپرپارامترهای مدل
     'main_input_dim': 32, # بعد فضای эмبدینگ اولیه
-    'knn_param': 16,       
+    'knn_param': 16,   
+    'interpolation_k': 3,  # ✅ جدید: k برای درون‌یابی در دیکودر (بسیار مهم)    
     'dropout_param': 0.1,
     'num_heads': 4, # ✅ جدید: تعداد سرها (باید بر main_input_dim و hidden_dims بخش‌پذیر باشد)
 

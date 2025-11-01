@@ -256,10 +256,10 @@ class Encoder(nn.Module):
 
 # بهبود: رفع کامل خطای CUDA با جایگزینی پیاده‌سازی دستی با knn_interpolate
 class InterpolationStage(nn.Module):
-    def __init__(self, coarse_dim, fine_dim, out_dim, knn_param, dropout_param=0.1):
+    def __init__(self, coarse_dim, fine_dim, out_dim, interpolation_k, dropout_param=0.1):
         super(InterpolationStage, self).__init__()
         
-        self.knn_param = knn_param
+        self.interpolation_k = interpolation_k
         self.mlp = nn.Sequential(
             nn.Linear(coarse_dim + fine_dim, out_dim),
             nn.ReLU(),
@@ -276,7 +276,7 @@ class InterpolationStage(nn.Module):
         # استفاده از knn_interpolate برای درون‌یابی امن و بهینه
         # این تابع برای هر نقطه در fine_pos، سه همسایه نزدیک در coarse_pos پیدا می‌کند،
         # ویژگی‌های آنها را بر اساس فاصله وزن‌دهی کرده و به نقطه fine_pos منتقل می‌کند.
-        k_safe = min(self.knn_param, coarse_pos.size(0))
+        k_safe = min(self.interpolation_k, coarse_pos.size(0))
         interpolated_features = knn_interpolate(
             coarse_features, coarse_pos, fine_pos, k=k_safe
         )
@@ -286,7 +286,7 @@ class InterpolationStage(nn.Module):
         return self.mlp(combined)
 
 class Decoder(nn.Module):
-    def __init__(self, main_output_dim, stages_config, knn_param, dropout_param=0.1):
+    def __init__(self, main_output_dim, stages_config, interpolation_k, dropout_param=0.1):
         super(Decoder, self).__init__()
         
         self.stages = nn.ModuleList()
@@ -302,7 +302,7 @@ class Decoder(nn.Module):
                     coarse_dim=coarse_stage_cfg['hidden_dim'],
                     fine_dim=fine_stage_cfg['hidden_dim'],
                     out_dim=fine_stage_cfg['hidden_dim'],
-                    knn_param=knn_param,
+                    interpolation_k=interpolation_k,
                     dropout_param=dropout_param
                 )
             )
@@ -334,7 +334,8 @@ class Decoder(nn.Module):
 
 class ASGFormer(nn.Module):
     def __init__(self, feature_dim, main_input_dim, main_output_dim, stages_config, 
-                 knn_param, num_heads, neighbor_finder, search_radius, dropout_param=0.1, kpconv_radius=0.1, kpconv_kernel_size=15):
+                 knn_param, num_heads, neighbor_finder, search_radius, interpolation_k, 
+                 dropout_param=0.1, kpconv_radius=0.1, kpconv_kernel_size=15):
         """
         Args:
             kpconv_radius (float): شعاع برای لایه KPConv اولیه.
@@ -413,7 +414,7 @@ class ASGFormer(nn.Module):
         self.decoder = Decoder(
             main_output_dim=main_output_dim,
             stages_config=stages_config,
-            knn_param=knn_param,
+            interpolation_k=interpolation_k,
             dropout_param=dropout_param
         )
 
