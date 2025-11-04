@@ -23,10 +23,10 @@ CONFIG = {
     'dataset_path': BASE_DIR / 'datasets' / 's3dis' / 's3dis', # مسیر دیتاست با pathlib
     'num_points': 4096,
     'num_classes': 13,
-    'feature_dim': 9, # XYZRGB + Normals
+    'feature_dim': 10, # ✅ تغییر: XYZRGB + Normals + Height = 9 + 1 = 10
     
     # هایپرپارامترهای آموزش
-    'learning_rate': 1e-3, 
+    'learning_rate': 1e-2, 
     'batch_size': 4,       
     'num_epochs': 120,
     'weight_decay': 1e-4, # مقدار رایج‌تر برای AdamW

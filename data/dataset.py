@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
+import random # ✅ جدید: برای Augmentation
 
 def read_file_list(file_path):
     """خواندن لیست مسیر فایل‌ها از یک فایل متنی."""
@@ -38,8 +39,9 @@ from torch_geometric.data import Data
 
 class PointCloudProcessor:
     """کلاسی برای پردازش و نرمال‌سازی داده‌های ابر نقاط."""
-    def __init__(self, num_points):
+    def __init__(self, num_points, is_training=True):
         self.num_points = num_points
+        self.is_training = is_training # مشخص می‌کند که آیا Augmentation باید اعمال شود یا خیر
 
     def _normalize_points(self, points_features):
         """
@@ -74,30 +76,68 @@ class PointCloudProcessor:
         # فرض می‌کنیم نرمال‌ها در ستون‌های 6, 7, 8 هستند و از قبل واحد هستند
         normals = points_features[:, 6:9]
 
-        # ترکیب مجدد ویژگی‌های نرمال‌شده
-        normalized_features = np.hstack((xyz_normalized, rgb_normalized, normals))
+        # ✅ جدید: Height Appending (اضافه کردن ارتفاع نرمال‌شده)
+        # z نرمال‌شده (ستون سوم xyz_normalized) به عنوان ویژگی دهم اضافه می‌شود
+        normalized_z = xyz_normalized[:, 2:3]
 
-        return normalized_features
+        # ترکیب مجدد ویژگی‌های نرمال‌شده
+        normalized_features = np.hstack((xyz_normalized, rgb_normalized, normals, normalized_z))
+
+        return normalized_features # اکنون 10 ویژگی برمی‌گرداند
+
+    def _apply_augmentation(self, points_features):
+        """اعمال افزایش داده‌ها (فقط در حالت آموزش)."""
+        
+        # --- 1. Data Scaling (مقیاس‌دهی تصادفی) ---
+        scale = np.random.uniform(0.9, 1.1)
+        points_features[:, :3] *= scale # فقط XYZ مقیاس‌دهی می‌شود
+
+        # --- 2. Color Drop (حذف رنگ تصادفی) ---
+        if np.random.rand() < 0.2: # ۲۰٪ احتمال حذف رنگ
+             points_features[:, 3:6] = 0.0 # رنگ‌ها صفر می‌شوند
+             
+        # --- 3. Jitter (لرزش جزئی) (یک تکنیک رایج دیگر) ---
+        jitter = np.random.normal(0, 0.02, (points_features.shape[0], 3))
+        points_features[:, :3] += jitter
+
+        # --- 4. چرخش تصادفی حول محور Z (بسیار مهم) ---
+        angle = np.random.uniform(0, 2 * np.pi)
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        rotation_matrix = np.array([
+            [cos_a, -sin_a, 0],
+            [sin_a,  cos_a, 0],
+            [0,      0,     1]
+        ])
+        # اعمال چرخش به XYZ و Normals
+        points_features[:, :3] = points_features[:, :3] @ rotation_matrix.T
+        points_features[:, 6:9] = points_features[:, 6:9] @ rotation_matrix.T
+        
+        return points_features
 
     def process(self, data, labels):
         """نمونه‌برداری و نرمال‌سازی داده‌ها."""
-        # 💡 نکته: نرمال‌سازی قبل از نمونه‌برداری انجام می‌شود
-        # تا مرکزیت و مقیاس بر اساس کل ابر نقاط اصلی محاسبه شود.
-        normalized_features = self._normalize_points(data)
 
-        # نمونه‌برداری تصادفی برای رسیدن به تعداد نقاط ثابت
-        num_original_points = len(normalized_features)
+        # --- نمونه‌برداری اولیه (قبل از Augmentation) ---
+        num_original_points = len(data)
         if num_original_points > self.num_points:
             choice = np.random.choice(num_original_points, self.num_points, replace=False)
         else:
-            # اگر تعداد نقاط کمتر بود، با تکرار به تعداد مورد نظر می‌رسانیم
             choice = np.random.choice(num_original_points, self.num_points, replace=True)
-
-        sampled_features = normalized_features[choice, :]
+            
+        sampled_data = data[choice, :]
         sampled_labels = labels[choice]
 
-        return torch.from_numpy(sampled_features).float(), torch.from_numpy(sampled_labels).long()
+        # --- نرمال‌سازی (روی نقاط نمونه‌برداری شده) ---
+        # ✅ تغییر: اکنون 10 ویژگی برمی‌گرداند (با احتساب ارتفاع)
+        # 💡 نکته: نرمال‌سازی قبل از نمونه‌برداری انجام می‌شود
+        # تا مرکزیت و مقیاس بر اساس کل ابر نقاط اصلی محاسبه شود.
+        normalized_features = self._normalize_points(sampled_data)
+        
+        # --- اعمال Augmentation (فقط در حالت آموزش) ---
+        if self.is_training:
+            normalized_features = self._apply_augmentation(normalized_features)
 
+        return torch.from_numpy(normalized_features).float(), torch.from_numpy(sampled_labels).long()
 
 
 class H5Dataset(Dataset):

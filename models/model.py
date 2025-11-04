@@ -356,8 +356,11 @@ class ASGFormer(nn.Module):
         # این کار به EdgeConv قدرت بیشتری در درک هندسه می‌دهد.
         
         # ما از یک MLP ساده برای EdgeConv استفاده می‌کنیم:
+        # ✅ تغییر: ورودی MLP اکنون (feature_dim + 3) است
+        # (10 ویژگی + 3 موقعیت) = 13
+        # (2 * 13) = 26
         initial_encoder_nn = nn.Sequential(
-            nn.Linear(2 * (feature_dim + 3), edgeconv_output_dim), # (2 * (9+3)) = 24
+            nn.Linear(2 * (feature_dim + 3), edgeconv_output_dim), # (2 * (10+3)) = 26
             nn.ReLU(),
             nn.LayerNorm(edgeconv_output_dim)
         )
@@ -426,7 +429,7 @@ class ASGFormer(nn.Module):
     def forward(self, data):
         # ✅ اصلاح: ورودی مدل اکنون آبجکت data از PyG است
         x_initial, pos, labels, batch = data.x, data.pos, data.y, data.batch
-        # x_initial: [N, 9], pos: [N, 3], labels: [N], batch: [N]
+        # x_initial: [N, 10], pos: [N, 3], labels: [N], batch: [N]
 
         # --- ۱. اجرای انکودر اولیه EdgeConv ---        
         # ✅✅✅ استفاده از تابع همسایه‌یاب ماژولار ✅✅✅
@@ -440,6 +443,7 @@ class ASGFormer(nn.Module):
 
         # 💡 ترکیب X و Pos برای ورودی غنی‌تر به EdgeConv
         # این کار به MLP داخل EdgeConv اجازه می‌دهد هم ویژگی‌ها و هم موقعیت را ببیند
+        # ✅ تغییر: ورودی cat اکنون [N, 10] و [N, 3] است
         combined_x_pos = torch.cat([x_initial, pos], dim=-1) # [N, 12]
 
         # اجرای EdgeConv

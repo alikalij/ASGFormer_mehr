@@ -22,9 +22,12 @@ def main():
     train_files = read_file_list(os.path.join(dataset_path, "list", "train5.txt"))
     val_files = read_file_list(os.path.join(dataset_path, "list", "val5.txt"))
 
-    processor = PointCloudProcessor(num_points=hyperparams['num_points'])
-    train_dataset = H5Dataset(train_files, processor, dataset_path)
-    val_dataset = H5Dataset(val_files, processor, dataset_path)
+    # ✅ تغییر: ساخت دو پردازشگر مجزا
+    train_processor = PointCloudProcessor(num_points=hyperparams['num_points'], is_training=True)
+    val_processor = PointCloudProcessor(num_points=hyperparams['num_points'], is_training=False)
+    
+    train_dataset = H5Dataset(train_files, train_processor, dataset_path)
+    val_dataset = H5Dataset(val_files, val_processor, dataset_path)
 
     # 💡 بهبود: استفاده از pin_memory برای انتقال سریع‌تر داده به GPU
     train_loader = DataLoader(train_dataset, batch_size=hyperparams['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
