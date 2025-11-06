@@ -129,7 +129,8 @@ class PointCloudProcessor:
 
         # --- اعمال Augmentation (فقط در حالت آموزش) ---
         if self.is_training:
-            normalized_features = self._apply_augmentation(normalized_features)
+            # کپی کردن داده برای جلوگیری از تغییر در داده‌های کش شده (اگر وجود داشته باشد)
+            sampled_data = self._apply_augmentation(sampled_data.copy())
 
         # --- نرمال‌سازی (روی نقاط نمونه‌برداری شده) ---
         # ✅ تغییر: اکنون 10 ویژگی برمی‌گرداند (با احتساب ارتفاع)
