@@ -127,16 +127,16 @@ class PointCloudProcessor:
         sampled_data = data[choice, :]
         sampled_labels = labels[choice]
 
+        # --- اعمال Augmentation (فقط در حالت آموزش) ---
+        if self.is_training:
+            normalized_features = self._apply_augmentation(normalized_features)
+
         # --- نرمال‌سازی (روی نقاط نمونه‌برداری شده) ---
         # ✅ تغییر: اکنون 10 ویژگی برمی‌گرداند (با احتساب ارتفاع)
         # 💡 نکته: نرمال‌سازی قبل از نمونه‌برداری انجام می‌شود
         # تا مرکزیت و مقیاس بر اساس کل ابر نقاط اصلی محاسبه شود.
         normalized_features = self._normalize_points(sampled_data)
-        
-        # --- اعمال Augmentation (فقط در حالت آموزش) ---
-        if self.is_training:
-            normalized_features = self._apply_augmentation(normalized_features)
-
+                
         return torch.from_numpy(normalized_features).float(), torch.from_numpy(sampled_labels).long()
 
 
@@ -161,7 +161,6 @@ class H5Dataset(Dataset):
         # ✅ اصلاح: تفکیک pos از x
         # pos فقط شامل XYZ است
         pos = features[:, :3]
-        # x شامل تمام ۹ ویژگی است
-        x = features
+        x = features # x شامل تمام 10 ویژگی است
         
         return Data(x=x, pos=pos, y=labels)

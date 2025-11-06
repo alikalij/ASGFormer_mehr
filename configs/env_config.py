@@ -26,7 +26,7 @@ CONFIG = {
     'feature_dim': 10, # ✅ تغییر: XYZRGB + Normals + Height = 9 + 1 = 10
     
     # هایپرپارامترهای آموزش
-    'learning_rate': 1e-2, 
+    'learning_rate': 1e-3, 
     'batch_size': 4,       
     'num_epochs': 120,
     'weight_decay': 1e-4, # مقدار رایج‌تر برای AdamW
