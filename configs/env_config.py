@@ -29,6 +29,8 @@ CONFIG = {
     'learning_rate': 1e-3, 
     'batch_size': 4,       
     'num_epochs': 120,
+    'finetune_epoch': 100, # ✅ جدید: Epoch شروع فاز Fine-tuning
+    'finetune_lr': 1e-5,   # ✅ جدید: نرخ یادگیری برای فاز Fine-tuning
     'weight_decay': 1e-4, # مقدار رایج‌تر برای AdamW
     'accumulation_steps': 4, # انباشت گرادیان
     

@@ -359,8 +359,10 @@ class ASGFormer(nn.Module):
         # ✅ تغییر: ورودی MLP اکنون (feature_dim + 3) است
         # (10 ویژگی + 3 موقعیت) = 13
         # (2 * 13) = 26
+        # ✅ اصلاح: ورودی MLP اکنون (feature_dim * 2) است
+        # ما دیگر pos را جداگانه به x نمی‌چسبانیم، چون pos از قبل در x (ویژگی 10 بعدی) وجود دارد.
         initial_encoder_nn = nn.Sequential(
-            nn.Linear(2 * (feature_dim + 3), edgeconv_output_dim), # (2 * (10+3)) = 26
+            nn.Linear(2 * feature_dim, edgeconv_output_dim), # (2 * 10) = 20
             nn.ReLU(),
             nn.LayerNorm(edgeconv_output_dim)
         )
@@ -444,11 +446,12 @@ class ASGFormer(nn.Module):
         # 💡 ترکیب X و Pos برای ورودی غنی‌تر به EdgeConv
         # این کار به MLP داخل EdgeConv اجازه می‌دهد هم ویژگی‌ها و هم موقعیت را ببیند
         # ✅ تغییر: ورودی cat اکنون [N, 10] و [N, 3] است
-        combined_x_pos = torch.cat([x_initial, pos], dim=-1) # [N, 12]
+        #combined_x_pos = torch.cat([x_initial, pos], dim=-1) # [N, 12]
 
         # اجرای EdgeConv
         # ورودی: (x, edge_index) -> (ویژگی‌ها، گراف)
-        x_encoded = self.initial_encoder_conv(x=combined_x_pos, edge_index=edge_index)
+        # ✅ اصلاح: EdgeConv مستقیماً روی x_initial (که شامل 10 ویژگی است) کار می‌کند
+        x_encoded = self.initial_encoder_conv(x=x_initial, edge_index=edge_index)
         x_encoded = self.initial_encoder_norm(x_encoded) # [N, 64]
 
         # --- ۱. اجرای انکودر اولیه KPConv ---
