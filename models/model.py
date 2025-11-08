@@ -284,7 +284,7 @@ class ASGFormer(nn.Module):
         self.search_radius = search_radius
         
         initial_encoder_nn = nn.Sequential(
-            nn.Linear(feature_dim+3, main_input_dim), 
+            nn.Linear(2*(feature_dim+3), main_input_dim), 
             nn.ReLU(),
             nn.LayerNorm(main_input_dim)
         )
