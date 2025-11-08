@@ -33,6 +33,11 @@ CONFIG = {
     'dropout_param': 0.2,
     'num_heads': 8, 
 
+    'loss_alpha': 1.0,
+    'loss_beta': 1.0,
+    'loss_gamma': 0.5,
+    'label_smoothing': 0.05,
+
     'neighbor_finder': 'knn', 
     'search_radius': 0.1,     
 

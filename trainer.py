@@ -4,7 +4,6 @@ import torch
 from tqdm import tqdm
 from utils.utils import load_checkpoint_dynamic, save_checkpoint
 from utils.metrics import calculate_metrics 
-from utils.losses import LovaszSoftmaxLoss 
 import os
 
 class Trainer:
@@ -14,8 +13,7 @@ class Trainer:
         self.model = model.to(self.device)
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.criterion_ce = criterion
-        self.criterion_lovasz = LovaszSoftmaxLoss().to(self.device) 
+        self.criterion = criterion        
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.num_classes = config['num_classes']
@@ -51,10 +49,6 @@ class Trainer:
         total_intersection = torch.zeros(self.num_classes, device=self.device)
         total_union = torch.zeros(self.num_classes, device=self.device)
 
-        current_criterion = self.criterion_ce
-        if epoch >= self.finetune_epoch:
-            current_criterion = self.criterion_lovasz
-
         train_loop = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.config['num_epochs']} [Train]")
         
         for step, batch in enumerate(train_loop):
@@ -62,7 +56,7 @@ class Trainer:
 
             with torch.amp.autocast(device_type=self.device.type, enabled=(self.device.type == 'cuda')):
                 outputs, labels = self.model(batch)
-                loss = current_criterion(outputs, labels) 
+                loss = self.criterion(outputs, labels) 
                 loss = loss / self.accumulation_steps 
 
             self.scaler.scale(loss).backward()
@@ -102,7 +96,7 @@ class Trainer:
         total_intersection = torch.zeros(self.num_classes, device=self.device)
         total_union = torch.zeros(self.num_classes, device=self.device)
 
-        validation_criterion = self.criterion_ce
+        validation_criterion = self.criterion
 
         val_loop = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{self.config['num_epochs']} [Val]")        
         with torch.no_grad():
@@ -135,7 +129,7 @@ class Trainer:
             if epoch == self.finetune_epoch:
                 print("\n" + "="*50)
                 print(f"STARTING FINE-TUNE PHASE (Epoch {epoch})")
-                print(f"Switching to Lovasz-Softmax Loss and reducing LR to {self.finetune_lr}.")
+                print(f"Applying fixed LR for Fine-tuning: {self.finetune_lr}.") 
                 print("="*50 + "\n")
                 for g in self.optimizer.param_groups:
                     g['lr'] = self.finetune_lr

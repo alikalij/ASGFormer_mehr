@@ -7,22 +7,51 @@ from torch_geometric.nn import EdgeConv,MessagePassing
 from torch_geometric.nn import knn_interpolate, knn_graph, fps, knn
 from torch_geometric.utils import softmax as pyg_softmax
 from utils.neighbor_finder import find_neighbors
-
+from torch_geometric.nn import global_mean_pool
 
 class VirtualNode(nn.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, hidden_dim, use_gate=True):
         super().__init__()
-        self.aggregate = nn.Linear(hidden_dim, hidden_dim)
-        self.distribute = nn.Linear(hidden_dim, hidden_dim)
+        self.aggregate_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
+        )
+        self.distribute_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
+        )
         self.norm = nn.LayerNorm(hidden_dim)
 
-    def forward(self, x):
-        if x.size(0) == 0:
+        self.use_gate = use_gate
+        if self.use_gate:
+            self.gate = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim), 
+                nn.Sigmoid()
+            )
+
+    def forward(self, x, batch):
+        if x.numel() == 0:
             return x
-        global_context = x.mean(dim=0, keepdim=True)
+        
+        global_context = global_mean_pool(x, batch)
+
         global_context = self.aggregate(global_context)
         global_context = self.norm(global_context)
-        return x + self.distribute(global_context)
+
+        ctxt_per_node = global_context[batch]
+
+        distributed_info = self.distribute(ctxt_per_node)
+
+        if self.use_gate:
+            gate_input = torch.cat([x, distributed_info], dim=-1)
+            g = self.gate(gate_input) 
+            out = x + g * distributed_info
+        else:
+            out = x + distributed_info
+
+        return out
 
 class AdaptiveGraphTransformerBlock(MessagePassing):
     def __init__(self, in_channels, out_channels, num_heads, dropout=0.1):
@@ -70,7 +99,7 @@ class AdaptiveGraphTransformerBlock(MessagePassing):
     def forward(self, x, pos, edge_index):
         x_res_1 = self.residual(x) 
 
-        message_output = self.propagate(edge_index, x=x, pos=pos) 
+        message_output = self.propagate(edge_index, x=x, pos=pos, size=(x.size(0), x.size(0))) 
 
         x = self.norm1(message_output + x_res_1)
 
@@ -80,26 +109,31 @@ class AdaptiveGraphTransformerBlock(MessagePassing):
         
         return x
 
-    def message(self, x_i, x_j, pos_i, pos_j, index):
+    def message(self, x_i, x_j, pos_i, pos_j, index, size_i):
         query = self.to_q(x_i) 
         key   = self.to_k(x_j) 
         value = self.to_v(x_j) 
 
         pos_enc = self.pos_embedding(pos_i - pos_j) 
-
         key = key + pos_enc
 
-        query = query.view(-1, self.num_heads, self.head_dim)
-        key   = key.view(-1, self.num_heads, self.head_dim)
-        value = value.view(-1, self.num_heads, self.head_dim)
+        E = query.size(0)
+
+        query = query.view(E, self.num_heads, self.head_dim)
+        key   = key.view(E, self.num_heads, self.head_dim)
+        value = value.view(E, self.num_heads, self.head_dim)
 
         attention_score = (query * key).sum(dim=-1) / math.sqrt(self.head_dim) 
 
-        attention_weights = pyg_softmax(attention_score, index) 
+        scores_flat = attention_score.view(-1)
+        index_rep = index.repeat_interleave(self.num_heads)
+        
+        attn_flat = pyg_softmax(scores_flat, index_rep)
+        attention_weights = attn_flat.view(E, self.num_heads)
 
-        message_output = attention_weights.unsqueeze(-1) * value
+        out = (attention_weights.unsqueeze(-1) * value).view(E, self.out_channels)
 
-        return message_output.view(-1, self.out_channels)
+        return out
     
     def update(self, aggr_out, x):
         return self.to_out(aggr_out)
@@ -188,7 +222,7 @@ class Encoder(nn.Module):
             elif edge_index is not None and edge_index.size(1) > 0: 
                  current_x = stage(current_x, current_pos, edge_index)
 
-            current_x = virtual_node(current_x)
+            current_x = virtual_node(current_x, current_batch)
             
             features_list.append(current_x)
             positions_list.append(current_pos)
@@ -202,7 +236,8 @@ class Encoder(nn.Module):
             return x, pos, labels, batch
         
         mask = fps(pos, batch, ratio=ratio)
-        return x[mask], pos[mask], labels[mask], batch[mask] if batch is not None else None
+        downsampled_batch = batch[mask] if batch is not None else None
+        return x[mask], pos[mask], labels[mask], batch[mask], downsampled_batch
 
 class InterpolationStage(nn.Module):
     def __init__(self, coarse_dim, fine_dim, out_dim, interpolation_k, dropout_param=0.1):
@@ -218,12 +253,12 @@ class InterpolationStage(nn.Module):
 
     def forward(self, coarse_features, coarse_pos, fine_features, fine_pos):
         if coarse_pos.size(0) == 0:
-            return self.mlp(torch.cat([torch.zeros_like(fine_features), fine_features], dim=1))
-
-        k_safe = min(self.interpolation_k, coarse_pos.size(0))
-        interpolated_features = knn_interpolate(
-            coarse_features, coarse_pos, fine_pos, k=k_safe
-        )
+            interpolated_features = torch.zeros_like(fine_features)
+        else:
+            k_safe = min(self.interpolation_k, coarse_pos.size(0))
+            interpolated_features = knn_interpolate(
+                coarse_features, coarse_pos, fine_pos, k=k_safe
+            )
 
         combined = torch.cat([interpolated_features, fine_features], dim=1)
         return self.mlp(combined)
@@ -259,6 +294,11 @@ class Decoder(nn.Module):
         if not encoder_features:
             return torch.empty(0), torch.empty(0)
 
+        encoder_features.pop(0) 
+        positions.pop(0)
+        sampled_labels.pop(0)
+        batches.pop(0)
+        
         x = encoder_features.pop()
         pos = positions.pop()
 
