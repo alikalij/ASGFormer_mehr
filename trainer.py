@@ -3,8 +3,8 @@
 import torch
 from tqdm import tqdm
 from utils.utils import load_checkpoint_dynamic, save_checkpoint
-from utils.metrics import calculate_metrics 
-from utils.losses import LovaszSoftmaxLoss 
+from utils.metrics import calculate_metrics # تابع متریک بچ به بچ
+from utils.losses import LovaszSoftmaxLoss # ✅ جدید: وارد کردن Loss جدید
 import os
 
 class Trainer:
@@ -15,12 +15,13 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.criterion_ce = criterion
-        self.criterion_lovasz = LovaszSoftmaxLoss().to(self.device) 
+        self.criterion_lovasz = LovaszSoftmaxLoss().to(self.device) # ✅ جدید: ساخت Lovasz
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.num_classes = config['num_classes']
-        self.accumulation_steps = config.get('accumulation_steps', 1) 
+        self.accumulation_steps = config.get('accumulation_steps', 1) # خواندن از کانفیگ
         
+        # ✅ جدید: تعریف پارامترهای Fine-tune
         self.finetune_epoch = config.get('finetune_epoch', 100) 
         self.finetune_lr = config.get('finetune_lr', 1e-5)
 
@@ -28,8 +29,10 @@ class Trainer:
         self.train_losses = []
         self.val_losses = []
 
+        # بارگذاری checkpoint در صورت وجود
         self._load_checkpoint()
         
+        # فعال‌سازی GradScaler فقط برای GPU
         self.scaler = torch.amp.GradScaler(enabled=(self.device.type == 'cuda'))
 
     def _load_checkpoint(self):
@@ -40,6 +43,7 @@ class Trainer:
             optimizer=self.optimizer,
             for_training=True
         )
+        # انتقال مجدد مدل به دستگاه پس از بارگذاری state_dict
         self.model.to(self.device)
         print(f"آموزش از epoch {self.start_epoch} ادامه می‌یابد.")
 
@@ -51,6 +55,7 @@ class Trainer:
         total_intersection = torch.zeros(self.num_classes, device=self.device)
         total_union = torch.zeros(self.num_classes, device=self.device)
 
+        # ✅ جدید: انتخاب تابع هزینه بر اساس Epoch
         current_criterion = self.criterion_ce
         if epoch >= self.finetune_epoch:
             current_criterion = self.criterion_lovasz
@@ -62,8 +67,8 @@ class Trainer:
 
             with torch.amp.autocast(device_type=self.device.type, enabled=(self.device.type == 'cuda')):
                 outputs, labels = self.model(batch)
-                loss = current_criterion(outputs, labels) 
-                loss = loss / self.accumulation_steps 
+                loss = current_criterion(outputs, labels) # ✅ استفاده از criterion فعلی
+                loss = loss / self.accumulation_steps # نرمال‌سازی برای انباشت
 
             self.scaler.scale(loss).backward()
 
@@ -76,6 +81,7 @@ class Trainer:
             
             total_loss += loss.item() * self.accumulation_steps
             
+            # --- Aggregat کردن متریک‌ها ---
             preds = torch.argmax(outputs, dim=1)
             _, _, batch_intersection, batch_union = calculate_metrics(outputs, labels, self.num_classes)
             total_intersection += batch_intersection
@@ -88,6 +94,7 @@ class Trainer:
 
         avg_loss = total_loss / len(self.train_loader)
         oa = total_correct / total_points if total_points > 0 else 0.0
+        # محاسبه mIoU نهایی با در نظر گرفتن کلاس‌های معتبر
         iou_per_class = total_intersection / (total_union + 1e-8)
         valid_classes = torch.where(total_union > 0)[0]
         miou = torch.mean(iou_per_class[valid_classes]).item() if valid_classes.numel() > 0 else 0.0
@@ -102,6 +109,8 @@ class Trainer:
         total_intersection = torch.zeros(self.num_classes, device=self.device)
         total_union = torch.zeros(self.num_classes, device=self.device)
 
+        # ✅ جدید: اعتبارسنجی همیشه با CrossEntropy انجام می‌شود
+        # چون معیار پایداری برای مقایسه است
         validation_criterion = self.criterion_ce
 
         val_loop = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{self.config['num_epochs']} [Val]")        
@@ -110,10 +119,11 @@ class Trainer:
                 batch = batch.to(self.device)
                 with torch.amp.autocast(device_type=self.device.type, enabled=(self.device.type == 'cuda')):
                     outputs, labels = self.model(batch)
-                    loss = validation_criterion(outputs, labels) 
+                    loss = validation_criterion(outputs, labels) # ✅ استفاده از CE
 
                 total_loss += loss.item()
 
+                # --- Aggregat کردن متریک‌ها ---
                 preds = torch.argmax(outputs, dim=1)
                 _, _, batch_intersection, batch_union = calculate_metrics(outputs, labels, self.num_classes)
                 total_intersection += batch_intersection
@@ -123,6 +133,7 @@ class Trainer:
 
         avg_loss = total_loss / len(self.val_loader)
         oa = total_correct / total_points if total_points > 0 else 0.0
+        # محاسبه mIoU نهایی
         iou_per_class = total_intersection / (total_union + 1e-8)
         valid_classes = torch.where(total_union > 0)[0]
         miou = torch.mean(iou_per_class[valid_classes]).item() if valid_classes.numel() > 0 else 0.0
@@ -132,11 +143,13 @@ class Trainer:
     def train(self):
         print(f"شروع آموزش از epoch {self.start_epoch}...")
         for epoch in range(self.start_epoch, self.config['num_epochs']):
+            # ✅ جدید: بررسی برای شروع فاز Fine-tune
             if epoch == self.finetune_epoch:
                 print("\n" + "="*50)
                 print(f"STARTING FINE-TUNE PHASE (Epoch {epoch})")
                 print(f"Switching to Lovasz-Softmax Loss and reducing LR to {self.finetune_lr}.")
                 print("="*50 + "\n")
+                # تنظیم دستی نرخ یادگیری برای فاز Fine-tune
                 for g in self.optimizer.param_groups:
                     g['lr'] = self.finetune_lr
 
@@ -146,11 +159,14 @@ class Trainer:
             val_loss, val_oa, val_miou = self._validate_epoch(epoch)
             self.val_losses.append(val_loss)
 
+            # ✅ تغییر: scheduler فقط قبل از فاز fine-tune باید step کند
             if self.scheduler and epoch < self.finetune_epoch:
                 self.scheduler.step()
 
+            # نمایش LR فعلی
             current_lr = self.optimizer.param_groups[0]['lr']
 
+            # چاپ خلاصه Epoch
             print(
                 f"\nEpoch {epoch+1} Summary:"
                 f"\n  Train -> Loss: {train_loss:.4f}, OA: {train_oa:.4f}, mIoU: {train_miou:.4f}"
@@ -158,6 +174,7 @@ class Trainer:
                 f"\n  LR: {current_lr:.6f}\n"
             )
 
+            # ذخیره Checkpoint
             save_checkpoint(
                 self.model, self.optimizer, epoch + 1, 
                 self.train_losses, self.val_losses, 
