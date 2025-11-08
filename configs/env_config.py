@@ -17,7 +17,7 @@ CONFIG = {
     'dataset_path': BASE_DIR / 'datasets' / 's3dis' / 's3dis', 
     'num_points': 4096,
     'num_classes': 13,
-    'feature_dim': 10,
+    'feature_dim': 6,
     
     'learning_rate': 1e-3, 
     'batch_size': 4,       
@@ -27,11 +27,11 @@ CONFIG = {
     'weight_decay': 1e-4, 
     'accumulation_steps': 4,
     
-    'main_input_dim': 32,
-    'knn_param': 16,   
+    'main_input_dim': 64,
+    'knn_param': 20,   
     'interpolation_k': 3,
-    'dropout_param': 0.1,
-    'num_heads': 4, 
+    'dropout_param': 0.2,
+    'num_heads': 8, 
 
     'neighbor_finder': 'knn', 
     'search_radius': 0.1,     
@@ -43,11 +43,11 @@ CONFIG = {
     'checkpoint_dir': DRIVE_DIR / "saved_models" , 
     
     'stages_config': [
-        {'hidden_dim': 32, 'num_layers': 1, 'downsample_ratio': None}, 
-        {'hidden_dim': 64, 'num_layers': 2, 'downsample_ratio': 0.25}, 
-        {'hidden_dim': 128, 'num_layers': 4, 'downsample_ratio': 0.25}, 
-        {'hidden_dim': 256, 'num_layers': 2, 'downsample_ratio': 0.25}, 
-        {'hidden_dim': 512, 'num_layers': 2, 'downsample_ratio': 0.25}, 
+        {'hidden_dim': 64, 'num_layers': 2, 'downsample_ratio': None}, 
+        {'hidden_dim': 128, 'num_layers': 3, 'downsample_ratio': 0.25}, 
+        {'hidden_dim': 256, 'num_layers': 4, 'downsample_ratio': 0.25}, 
+        {'hidden_dim': 512, 'num_layers': 6, 'downsample_ratio': 0.25}, 
+        {'hidden_dim': 1024, 'num_layers': 3, 'downsample_ratio': 0.25}, 
     ]
 }
 

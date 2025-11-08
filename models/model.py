@@ -282,30 +282,16 @@ class ASGFormer(nn.Module):
         self.knn_param = knn_param
         self.neighbor_finder = neighbor_finder
         self.search_radius = search_radius
-
-        edgeconv_output_dim = 64 
         
         initial_encoder_nn = nn.Sequential(
-            nn.Linear(2 * feature_dim, edgeconv_output_dim), 
-            nn.ReLU(),
-            nn.LayerNorm(edgeconv_output_dim)
-        )
-
-        print(f"Initializing EdgeConv layer with input MLP: 2*({feature_dim}+3) -> {edgeconv_output_dim}")
-        self.initial_encoder_conv = EdgeConv(nn=initial_encoder_nn, aggr='max')
-        self.initial_encoder_norm = nn.LayerNorm(edgeconv_output_dim)
-        
-        kpconv_output_dim = 64
-        self.kpconv_norm = nn.LayerNorm(kpconv_output_dim)
-
-        print(f"Initializing Embedding MLPs: x_mlp input={edgeconv_output_dim}, pos_mlp input=3, output={main_input_dim}")
-        self.x_mlp = nn.Sequential(
-            nn.Linear(edgeconv_output_dim, main_input_dim),
+            nn.Linear(feature_dim+3, main_input_dim), 
             nn.ReLU(),
             nn.LayerNorm(main_input_dim)
-        )        
-        
-        print(f"Initializing Main Encoder with input_dim={main_input_dim}")
+        )
+
+        self.initial_encoder_conv = EdgeConv(nn=initial_encoder_nn, aggr='max')
+        self.initial_encoder_norm = nn.LayerNorm(main_input_dim)
+
         self.encoder = Encoder(
             input_dim=main_input_dim, 
             stages_config=stages_config,
@@ -316,7 +302,6 @@ class ASGFormer(nn.Module):
             dropout_param=dropout_param
         )
 
-        print("Initializing Main Decoder...")
         self.decoder = Decoder(
             main_output_dim=main_output_dim,
             stages_config=stages_config,
@@ -325,7 +310,6 @@ class ASGFormer(nn.Module):
         )
 
         self._initialize_weights()
-        print("Model Initialization Complete.")
 
     def forward(self, data):
         x_initial, pos, labels, batch = data.x, data.pos, data.y, data.batch
@@ -337,13 +321,13 @@ class ASGFormer(nn.Module):
             k=self.knn_param,
             r=self.search_radius
         )
+   
+        combined_x_pos = torch.cat([x_initial, pos], dim=-1)
 
-        x_encoded = self.initial_encoder_conv(x=x_initial, edge_index=edge_index)
+        x_encoded = self.initial_encoder_conv(x=combined_x_pos, edge_index=edge_index)
         x_encoded = self.initial_encoder_norm(x_encoded)
 
-        combined_features = self.x_mlp(x_encoded) 
-
-        encoder_features, positions, sampled_labels, batches = self.encoder(combined_features, pos, labels, batch)
+        encoder_features, positions, sampled_labels, batches = self.encoder(x_encoded, pos, labels, batch)
 
         logits, final_labels_from_decoder = self.decoder(encoder_features, positions, sampled_labels, batches)
 

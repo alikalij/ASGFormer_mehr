@@ -110,6 +110,6 @@ class H5Dataset(Dataset):
         features, labels = self.processor.process(data, labels)
         
         pos = features[:, :3]
-        x = features 
+        x = features[:, 3:] 
         
         return Data(x=x, pos=pos, y=labels)
