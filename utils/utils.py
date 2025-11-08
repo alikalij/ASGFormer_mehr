@@ -64,12 +64,11 @@ def find_latest_checkpoint(directory, prefix="agtransformer"):
             
     if not checkpoint_data:
         return None
-    
+        
     latest_checkpoint = max(
         checkpoint_data, 
-        key=lambda x: (x['epoch'], x['timestamp'])
+        key=lambda x: (x['timestamp'], x['epoch'])
     )
-    
     return os.path.join(directory, latest_checkpoint['filename'])
 
 def load_checkpoint_dynamic(model, directory, optimizer=None, for_training=False):
