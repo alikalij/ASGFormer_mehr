@@ -3,7 +3,6 @@
 import torch
 from torch_geometric.nn import knn_graph, radius_graph
 
-# FAISS را به صورت اختیاری وارد می‌کنیم
 try:
     import faiss
     import numpy as np
@@ -15,13 +14,10 @@ except ImportError:
 
 
 def find_neighbors(pos, batch, method, k, r):
-    """
-    یک تابع جامع برای یافتن همسایه‌ها بر اساس متد انتخابی.
-    """
     if method == 'knn':
         return find_neighbors_knn(pos, batch, k)
     elif method == 'radius':
-        return find_neighbors_radius(pos, batch, r, k) # از k به عنوان max_neighbors استفاده می‌کنیم
+        return find_neighbors_radius(pos, batch, r, k) 
     elif method == 'faiss':
         if not FAISS_AVAILABLE:
             print("Error: FAISS method selected but library is not available. Falling back to KNN.")
@@ -32,22 +28,16 @@ def find_neighbors(pos, batch, method, k, r):
 
 
 def find_neighbors_knn(pos, batch, k):
-    """از knn_graph استاندارد PyG استفاده می‌کند."""
     k_safe = min(k, pos.size(0) - 1)
     if k_safe <= 0: k_safe = 1
     return knn_graph(pos, k=k_safe, batch=batch, loop=False)
 
 
 def find_neighbors_radius(pos, batch, r, k_max):
-    """از radius_graph استاندارد PyG استفاده می‌کند."""
     return radius_graph(pos, r=r, batch=batch, loop=False, max_num_neighbors=k_max)
 
 
 def find_neighbors_faiss_ann(pos, batch, k):
-    """
-    از FAISS برای ANN (Approximate Nearest Neighbor) سریع استفاده می‌کند.
-    (بر اساس کد پیشنهادی ChatGPT)
-    """
     device = pos.device
     pos_np = pos.cpu().numpy().astype(np.float32)
     batch_np = batch.cpu().numpy()
@@ -58,38 +48,31 @@ def find_neighbors_faiss_ann(pos, batch, k):
 
     for b_idx in unique_batches:
         mask = (batch_np == b_idx)
-        indices_in_batch = np.where(mask)[0] # اندیس‌های سراسری نقاط در این بچ
+        indices_in_batch = np.where(mask)[0] 
         points_in_batch = pos_np[mask]
         
         num_points_in_batch = points_in_batch.shape[0]
         if num_points_in_batch <= k:
-            # اگر تعداد نقاط کمتر از k است، از KNN دقیق استفاده کن
             if num_points_in_batch <= 1: continue
             edge_index_batch = knn_graph(pos[mask], k=num_points_in_batch-1, batch=None, loop=False)
             all_edge_i.append(torch.from_numpy(indices_in_batch[edge_index_batch[0].cpu().numpy()]))
             all_edge_j.append(torch.from_numpy(indices_in_batch[edge_index_batch[1].cpu().numpy()]))
             continue
 
-        # --- استفاده از FAISS ---
-        res = faiss.StandardGpuResources() # استفاده از GPU
-        index_flat = faiss.IndexFlatL2(3)  # 3D L2 distance
+        res = faiss.StandardGpuResources() 
+        index_flat = faiss.IndexFlatL2(3)  
         gpu_index = faiss.index_cpu_to_gpu(res, 0, index_flat)
         gpu_index.add(points_in_batch)
 
-        # جستجو (k+1 چون شامل خود نقطه هم می‌شود)
         _, I = gpu_index.search(points_in_batch, k + 1)
         
-        # --- تبدیل نتایج FAISS به edge_index ---
-        # I حاوی اندیس‌های محلی (داخل بچ) است
         source_nodes_local = np.arange(num_points_in_batch).reshape(-1, 1).repeat(k, axis=1)
-        neighbor_nodes_local = I[:, 1:] # حذف ستون اول (خود نقطه)
+        neighbor_nodes_local = I[:, 1:] 
 
-        # فیلتر کردن نتایج نامعتبر (اگر نقاط تکراری وجود داشته باشند)
         valid_mask = neighbor_nodes_local != -1
         source_nodes_local = source_nodes_local[valid_mask]
         neighbor_nodes_local = neighbor_nodes_local[valid_mask]
 
-        # تبدیل اندیس‌های محلی به سراسری
         source_nodes_global = indices_in_batch[source_nodes_local]
         neighbor_nodes_global = indices_in_batch[neighbor_nodes_local]
 

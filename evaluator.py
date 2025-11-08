@@ -11,9 +11,8 @@ from models.model import ASGFormer
 from data.dataset import H5Dataset, PointCloudProcessor, read_file_list
 from torch_geometric.loader import DataLoader
 from utils.utils import load_checkpoint_dynamic
-from utils.metrics import calculate_final_metrics # تابع جدید برای نتایج نهایی
+from utils.metrics import calculate_final_metrics 
 
-# نقشه رنگ S3DIS (مانند قبل)
 S3DIS_COLOR_MAP = np.array([
     [152, 223, 138],  # 0: ceiling
     [174, 199, 232],  # 1: floor
@@ -28,8 +27,7 @@ S3DIS_COLOR_MAP = np.array([
     [196, 156, 148],  # 10: bookcase
     [23, 190, 207],   # 11: board
     [247, 182, 210],  # 12: clutter
-    # اگر کلاس‌های بیشتری دارید، رنگ‌های بیشتری اضافه کنید
-]) / 255.0  # نرمال‌سازی به بازه [0, 1]
+]) / 255.0  
 
 class Evaluator:
     def __init__(self, config):
@@ -38,7 +36,6 @@ class Evaluator:
         self.checkpoint_dir = config['checkpoint_dir']
         self.num_classes = config['num_classes']
         
-        # ساخت مدل (فقط برای بارگذاری checkpoint لازم است)
         self.model = ASGFormer(
             feature_dim=config['feature_dim'],
             main_input_dim=config['main_input_dim'],
@@ -48,7 +45,6 @@ class Evaluator:
             dropout_param=config['dropout_param']
         )
         
-        # بارگذاری آخرین checkpoint
         self._load_latest_checkpoint()
 
     def _load_latest_checkpoint(self):
@@ -57,7 +53,7 @@ class Evaluator:
             self.model, self.checkpoint_dir, optimizer=None, for_training=False
         )
         self.model.to(self.device)
-        self.model.eval() # مدل همیشه در حالت ارزیابی است
+        self.model.eval() 
 
     def plot_loss(self, save_path="loss_curve.png"):
         if not self.train_losses or not self.val_losses:
@@ -109,14 +105,12 @@ class Evaluator:
     def visualize(self, dataloader, num_samples=3):
         print(f"در حال آماده‌سازی برای بصری‌سازی {num_samples} نمونه...")
         samples_processed = 0
-        # 💡 بهبود: استفاده از try-except برای مدیریت خطای احتمالی Open3D
         try:
             with torch.no_grad():
                 for data in dataloader:
                     if samples_processed >= num_samples: break
                     
                     data = data.to(self.device)
-                    # 💡 نکته: مطمئن شوید مدل در حالت eval است (در __init__ انجام شده)
                     outputs, labels = self.model(data) 
                     preds = torch.argmax(outputs, dim=1)
 
@@ -124,28 +118,19 @@ class Evaluator:
                     true_labels = labels.cpu().numpy()
                     pred_labels = preds.cpu().numpy()
 
-                    # --- ساخت ابر نقاط Open3D ---
-                    
-                    # ابر نقاط Ground Truth (واقعی)
                     gt_pcd = o3d.geometry.PointCloud()
                     gt_pcd.points = o3d.utility.Vector3dVector(points)
-                    # ✅ تکمیل شده: تنظیم رنگ‌ها بر اساس برچسب واقعی
-                    # جلوگیری از خطای ایندکس اگر برچسبی خارج از محدوده باشد
                     valid_gt_labels = np.clip(true_labels, 0, S3DIS_COLOR_MAP.shape[0] - 1)
                     gt_pcd.colors = o3d.utility.Vector3dVector(S3DIS_COLOR_MAP[valid_gt_labels])
 
-                    # ابر نقاط Prediction (پیش‌بینی مدل)
                     pred_pcd = o3d.geometry.PointCloud()
                     pred_pcd.points = o3d.utility.Vector3dVector(points)
-                    # ✅ تکمیل شده: تنظیم رنگ‌ها بر اساس پیش‌بینی مدل
                     valid_pred_labels = np.clip(pred_labels, 0, S3DIS_COLOR_MAP.shape[0] - 1)
                     pred_pcd.colors = o3d.utility.Vector3dVector(S3DIS_COLOR_MAP[valid_pred_labels])
                     
-                    # انتقال ابر نقاط پیش‌بینی شده به کنار ابر نقاط واقعی
                     translation_vector = np.array([(np.max(points[:, 0]) - np.min(points[:, 0])) * 1.1, 0, 0])
                     pred_pcd.translate(translation_vector)
 
-                    # --- نمایش ---
                     print(f"\nنمایش نمونه {samples_processed + 1} (پنجره Open3D باز می‌شود):")
                     print("  ابر نقاط سمت چپ: Ground Truth (واقعی)")
                     print("  ابر نقاط سمت راست: Prediction (پیش‌بینی مدل)")
