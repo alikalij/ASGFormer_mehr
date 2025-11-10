@@ -237,7 +237,7 @@ class Encoder(nn.Module):
         
         mask = fps(pos, batch, ratio=ratio)
         downsampled_batch = batch[mask] if batch is not None else None
-        return x[mask], pos[mask], labels[mask], batch[mask], downsampled_batch
+        return x[mask], pos[mask], labels[mask], downsampled_batch
 
 class InterpolationStage(nn.Module):
     def __init__(self, coarse_dim, fine_dim, out_dim, interpolation_k, dropout_param=0.1):
