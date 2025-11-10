@@ -7,7 +7,7 @@ from models.model import ASGFormer
 from data.dataset import H5Dataset, PointCloudProcessor, read_file_list, compute_class_weights
 from trainer import Trainer 
 from configs.env_config import CONFIG 
-from .utils.losses import CombinedLoss
+from utils.losses import CombinedLoss
 
 import os
 import h5py
