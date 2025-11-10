@@ -37,12 +37,12 @@ class VirtualNode(nn.Module):
         
         global_context = global_mean_pool(x, batch)
 
-        global_context = self.aggregate(global_context)
+        global_context = self.aggregate_mlp(global_context)
         global_context = self.norm(global_context)
 
         ctxt_per_node = global_context[batch]
 
-        distributed_info = self.distribute(ctxt_per_node)
+        distributed_info = self.distribute_mlp(ctxt_per_node)
 
         if self.use_gate:
             gate_input = torch.cat([x, distributed_info], dim=-1)
