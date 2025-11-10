@@ -5,32 +5,42 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DiceLoss(nn.Module):
+    """
+    DiceLoss اصلاح‌شده برای ورودی [N_total, C]
+    """
     def __init__(self, eps=1e-6, ignore_index=None):
         super().__init__()
         self.eps = eps
         self.ignore_index = ignore_index
 
     def forward(self, logits, target):
-        probs = F.softmax(logits, dim=1)  
+        probs = F.softmax(logits, dim=1)
         n_classes = probs.shape[1]
-
-        if logits.dim() == 4:
-            B,C,H,W = logits.shape
-            probs = probs.view(B, C, -1)
-            target = target.view(B, -1)
-        else:
-            B,C,N = probs.shape
-        target_onehot = F.one_hot(target.long(), num_classes=n_classes)  
-        target_onehot = target_onehot.permute(0,2,1).float()  
+        
+        # [N_total, C]
+        target_onehot = F.one_hot(target.long(), num_classes=n_classes).float()
+        
+        # [N_total, C]
+        probs = probs
 
         if self.ignore_index is not None:
-            mask = (target != self.ignore_index).unsqueeze(1)  
-            probs = probs * mask
-            target_onehot = target_onehot * mask
+            # [N_total]
+            mask = (target != self.ignore_index)
+            # Apply mask to flattened tensors
+            probs = probs[mask]
+            target_onehot = target_onehot[mask]
 
-        numerator = 2 * (probs * target_onehot).sum(dim=2)  
-        denominator = probs.sum(dim=2) + target_onehot.sum(dim=2)  
+        if probs.numel() == 0:
+            return probs.new_tensor(0.)
+
+        # Sum over the N_total dimension for each class
+        # numerator and denominator will be [C]
+        numerator = 2 * (probs * target_onehot).sum(dim=0)
+        denominator = probs.sum(dim=0) + target_onehot.sum(dim=0)
+        
         dice = (numerator + self.eps) / (denominator + self.eps)
+        
+        # Average the dice score across all present classes
         loss = 1 - dice.mean()
         return loss
 
@@ -46,14 +56,10 @@ def lovasz_grad(gt_sorted):
     return jaccard
 
 def flatten_probas(probas, labels, ignore=None):
-    if probas.dim() == 3:
-        C, B, N = probas.shape
-        probas = probas.permute(1,0,2).reshape(-1, C).permute(1,0)  
-        labels = labels.view(-1)
-    elif probas.dim() == 2:
-        pass
-    probas = probas.contiguous()
-    labels = labels.contiguous()
+    """
+    utility function for Lovasz-Softmax,
+    expects [C, N] and [N]
+    """
     if ignore is None:
         return probas, labels
     valid = (labels != ignore)
@@ -62,10 +68,16 @@ def flatten_probas(probas, labels, ignore=None):
     return vprobas, vlabels
 
 def lovasz_softmax_flat(probas, labels, classes='present'):
+    """
+    expects [C, N] and [N]
+    """
     C, P = probas.size()
+    if P == 0:
+        return probas.new_tensor(0.)
+        
     losses = []
     for c in range(C):
-        fg = (labels == c).float()  
+        fg = (labels == c).float()
         if classes == 'present' and fg.sum() == 0:
             continue
         errors = (fg - probas[c]).abs()
@@ -78,27 +90,25 @@ def lovasz_softmax_flat(probas, labels, classes='present'):
     return sum(losses) / len(losses)
 
 class LovaszSoftmax(nn.Module):
+    """
+    Lovasz-Softmax اصلاح‌شده برای ورودی [N_total, C]
+    """
     def __init__(self, ignore_index=None):
         super().__init__()
         self.ignore_index = ignore_index
 
     def forward(self, logits, labels):
+        # 1. Get Probas: [N_total, C]
         probas = F.softmax(logits, dim=1)
-        B, C, N = probas.shape
-        total_loss = 0.0
-        count = 0
-        for b in range(B):
-            prob = probas[b]  
-            lab = labels[b]   
-            prob_f, lab_f = flatten_probas(prob, lab, self.ignore_index)
-            if lab_f.numel() == 0:
-                continue
-            loss = lovasz_softmax_flat(prob_f, lab_f, classes='present')
-            total_loss += loss
-            count += 1
-        if count == 0:
-            return probas.new_tensor(0.)
-        return total_loss / count
+        
+        # 2. Permute for lovasz_softmax_flat: [C, N_total]
+        probas_permuted = probas.permute(1, 0)
+        
+        # 3. Flatten (handles ignore_index)
+        probas_flat, labels_flat = flatten_probas(probas_permuted, labels, self.ignore_index)
+        
+        # 4. Calculate loss
+        return lovasz_softmax_flat(probas_flat, labels_flat, classes='present')
 
 
 class CombinedLoss(nn.Module):
@@ -117,10 +127,12 @@ class CombinedLoss(nn.Module):
         self.ignore_index = ignore_index
 
         if class_weights is not None:
-            cw = torch.tensor(class_weights, dtype=torch.float)
-            self.ce = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index, label_smoothing=label_smoothing)
+            # Fix UserWarning: use .clone().detach()
+            cw = class_weights.clone().detach().float()
         else:
-            self.ce = nn.CrossEntropyLoss(ignore_index=ignore_index, label_smoothing=label_smoothing)
+            cw = None
+
+        self.ce = nn.CrossEntropyLoss(weight=cw, ignore_index=ignore_index, label_smoothing=label_smoothing)
 
         self.lovasz = LovaszSoftmax(ignore_index=ignore_index)
         self.dice = DiceLoss(ignore_index=ignore_index)
@@ -130,17 +142,27 @@ class CombinedLoss(nn.Module):
         self.focal_alpha = focal_alpha
 
     def focal_loss(self, logits, target):
+        # This implementation already works with [N, C] and [N]
         ce_loss = F.cross_entropy(logits, target, reduction='none', ignore_index=self.ignore_index)
         p_t = torch.exp(-ce_loss)
         loss = ((1 - p_t) ** self.focal_gamma) * ce_loss
+        
         if self.focal_alpha is not None:
+             # Handle alpha weighting if needed (currently pass)
             pass
+
+        # Apply ignore_index mask *after* calculation
         if self.ignore_index is not None:
-            loss = loss[target != self.ignore_index]
+            mask = (target != self.ignore_index)
+            loss = loss[mask]
+            
         return loss.mean()
 
     def forward(self, logits, target):
+        # logits: [N_total, C]
+        # target: [N_total]
         loss = 0.0
+        
         if self.alpha > 0:
             if self.use_focal:
                 loss_ce = self.focal_loss(logits, target)
